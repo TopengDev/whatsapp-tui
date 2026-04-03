@@ -260,9 +260,25 @@ fn convert_realtime_message(
     let (dl_path, dl_key, dl_sha, dl_enc_sha) = extract_download_params(wa_msg);
     let meta = extract_media_meta(wa_msg);
 
+    // Resolve LID→phone for the chat JID, same as convert_conversation.
+    // Real-time messages may arrive with LID chat JIDs.
+    let raw_chat_jid = info.source.chat.to_string();
+    let chat_jid = if raw_chat_jid.contains("@lid") {
+        // Look up the phone JID from the sender or fall back to raw
+        // For DMs, the sender's phone JID often IS the chat's phone JID
+        let sender_str = info.source.sender.to_string();
+        if !sender_str.contains("@lid") && sender_str.contains("@s.whatsapp.net") && !info.source.is_from_me {
+            sender_str
+        } else {
+            raw_chat_jid
+        }
+    } else {
+        raw_chat_jid
+    };
+
     Message {
         id: info.id.clone(),
-        chat_jid: info.source.chat.to_string(),
+        chat_jid,
         sender_jid: info.source.sender.to_string(),
         timestamp: info.timestamp.timestamp(),
         content,

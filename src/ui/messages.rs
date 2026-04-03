@@ -46,10 +46,6 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
     let selected_idx = active.selected_msg_idx;
     let is_focused = app.focus == AppFocus::Messages;
 
-    // Track image positions: (message_id, start_line, height)
-    let mut image_positions: Vec<(String, usize, usize)> = Vec::new();
-    let img_height = 8usize;
-
     for (msg_idx, msg) in active.messages.iter().enumerate() {
         let is_selected = is_focused && selected_idx == Some(msg_idx);
         let sel_style = if is_selected {
@@ -148,19 +144,20 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
             crate::store::messages::MessageType::Sticker
                 | crate::store::messages::MessageType::Image
         ) {
-            // Image/sticker rendering is handled after the paragraph via StatefulImage.
-            // Here we just reserve space with a placeholder.
-            if active.media_cache.contains_key(&msg.id) {
-                // Reserve lines and record position for image overlay
-                image_positions.push((msg.id.clone(), lines.len(), img_height));
-                for _ in 0..img_height {
-                    lines.push(Line::from(vec![Span::styled(
-                        format!("{}  ", content_prefix),
-                        sel_style,
-                    )]));
-                }
+            let type_label = msg.message_type.as_str();
+            let cached = active.media_cache.contains_key(&msg.id);
+            if cached && is_selected {
+                // Selected + cached: rendered in preview area below
+                lines.push(Line::from(vec![Span::styled(
+                    format!("{}\u{1F5BC} [{}] \u{25BC} preview below", content_prefix, type_label),
+                    Style::default().fg(theme::ACCENT).patch(sel_style),
+                )]));
+            } else if cached {
+                lines.push(Line::from(vec![Span::styled(
+                    format!("{}\u{1F5BC} [{}]", content_prefix, type_label),
+                    Style::default().fg(theme::ACCENT).patch(sel_style),
+                )]));
             } else {
-                let type_label = msg.message_type.as_str();
                 let hint = if matches!(
                     msg.message_type,
                     crate::store::messages::MessageType::Sticker
@@ -175,6 +172,13 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
                 lines.push(Line::from(vec![Span::styled(
                     format!("{}[{} - {}]", content_prefix, type_label, hint),
                     theme::muted_style().patch(sel_style),
+                )]));
+            }
+            // Caption for images
+            if let Some(ref cap) = msg.caption {
+                lines.push(Line::from(vec![Span::styled(
+                    format!("{}{}", content_prefix, cap),
+                    sel_style,
                 )]));
             }
         } else if matches!(msg.message_type, crate::store::messages::MessageType::Video) {
@@ -252,39 +256,49 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
         .saturating_sub(active.scroll_from_bottom)
         .min(max_scroll);
 
+    // Split area: if selected message is a cached image, show preview in bottom portion
+    let selected_media_id = active.selected_msg_idx.and_then(|idx| {
+        active.messages.get(idx).and_then(|m| {
+            if matches!(
+                m.message_type,
+                crate::store::messages::MessageType::Sticker
+                    | crate::store::messages::MessageType::Image
+            ) && active.media_cache.contains_key(&m.id)
+            {
+                Some(m.id.clone())
+            } else {
+                None
+            }
+        })
+    });
+
+    let (msg_area, img_area) = if selected_media_id.is_some() {
+        let chunks = ratatui::layout::Layout::vertical([
+            ratatui::layout::Constraint::Min(5),
+            ratatui::layout::Constraint::Length(12),
+        ])
+        .split(area);
+        (chunks[0], Some(chunks[1]))
+    } else {
+        (area, None)
+    };
+
     let paragraph = Paragraph::new(lines)
         .block(block)
         .wrap(Wrap { trim: false })
         .scroll((scroll as u16, 0));
+    frame.render_widget(paragraph, msg_area);
 
-    frame.render_widget(paragraph, area);
-
-    // Render images at their reserved positions (overlay on top of paragraph)
-    let inner = Rect {
-        x: area.x + 1, // inside border
-        y: area.y + 1,
-        width: area.width.saturating_sub(2),
-        height: area.height.saturating_sub(2),
-    };
-
-    if let Some(ref mut active) = app.active_chat {
-        for (msg_id, start_line, height) in &image_positions {
-            // Calculate screen position: start_line - scroll = visible line offset
-            let visible_y = (*start_line as isize) - (scroll as isize);
-            if visible_y < 0 || visible_y >= inner.height as isize {
-                continue; // Off-screen
-            }
-            let img_area = Rect {
-                x: inner.x + 4, // indent
-                y: inner.y + visible_y as u16,
-                width: inner.width.saturating_sub(6).min(30),
-                height: (*height as u16).min(inner.height.saturating_sub(visible_y as u16)),
-            };
-            if img_area.height == 0 || img_area.width == 0 {
-                continue;
-            }
-            if let Some(proto) = active.media_cache.get_mut(msg_id) {
-                super::image::render_protocol(frame, img_area, proto);
+    // Render image preview for selected media message
+    if let (Some(ref media_id), Some(preview_area)) = (selected_media_id, img_area) {
+        if let Some(ref mut active) = app.active_chat {
+            if let Some(proto) = active.media_cache.get_mut(media_id.as_str()) {
+                let img_block = Block::default()
+                    .borders(Borders::TOP)
+                    .border_style(theme::unfocused_border());
+                let img_inner = img_block.inner(preview_area);
+                frame.render_widget(img_block, preview_area);
+                super::image::render_protocol(frame, img_inner, proto);
             }
         }
     }

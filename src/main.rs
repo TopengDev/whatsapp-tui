@@ -60,6 +60,12 @@ fn setup_terminal() -> Result<Terminal<CrosstermBackend<io::Stdout>>> {
         stdout,
         crossterm::event::PopKeyboardEnhancementFlags
     );
+    // Drain any pending input from tmux send-keys or shell startup.
+    // Without this, the Enter key from `tmux send-keys 'cargo run' Enter`
+    // arrives after raw mode is enabled and gets routed as a keypress.
+    while crossterm::event::poll(std::time::Duration::from_millis(50))? {
+        let _ = crossterm::event::read()?;
+    }
     let backend = CrosstermBackend::new(stdout);
     let terminal = Terminal::new(backend)?;
     Ok(terminal)
