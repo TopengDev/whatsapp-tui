@@ -631,16 +631,24 @@ impl App {
             }
             WaEvent::ContactUpdate(contact) => {
                 let _ = self.store.upsert_contact(&contact);
-                let name = contact
-                    .push_name
-                    .as_deref()
-                    .or(contact.name.as_deref())
-                    .unwrap_or("");
-                if !name.is_empty() {
-                    let _ = self.store.set_chat_name(&contact.jid, name);
-                    let _ = self.store.set_chat_name_by_lid(&contact.jid, name);
+                // Saved contact name (from address book) always wins.
+                // Push name (self-set by other person) only fills in numbers.
+                if let Some(ref saved_name) = contact.name {
+                    if !saved_name.is_empty() {
+                        let _ = self
+                            .store
+                            .set_chat_name_force(&contact.jid, saved_name);
+                        let _ = self
+                            .store
+                            .set_chat_name_by_lid(&contact.jid, saved_name);
+                    }
+                } else if let Some(ref push_name) = contact.push_name {
+                    if !push_name.is_empty() {
+                        // Only update if current name is a phone number
+                        let _ = self.store.set_chat_name(&contact.jid, push_name);
+                        let _ = self.store.set_chat_name_by_lid(&contact.jid, push_name);
+                    }
                 }
-                // Bulk-resolve in case chats arrived after earlier ContactUpdates
                 let _ = self.store.resolve_chat_names();
                 let _ = self.load_chats();
             }

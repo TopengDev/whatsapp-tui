@@ -67,7 +67,7 @@ pub fn get_ordered(conn: &Connection) -> Result<Vec<Chat>> {
          unread_count, muted, pinned, archived, lid_jid \
          FROM chats \
          WHERE jid NOT LIKE '%@lid' \
-         ORDER BY pinned DESC, last_message_ts DESC",
+         ORDER BY pinned DESC, last_message_ts IS NULL, last_message_ts DESC, name COLLATE NOCASE",
     )?;
     let rows = stmt
         .query_map([], |row| {
@@ -134,7 +134,22 @@ pub fn set_unread_count(conn: &Connection, jid: &str, count: i32) -> Result<()> 
 }
 
 /// Update chat name only if the new name is non-empty and the chat exists.
+/// Update chat name only if the current name is a phone number or empty.
+/// Never overwrites a resolved contact name with a push name.
 pub fn set_name(conn: &Connection, jid: &str, name: &str) -> Result<()> {
+    if !name.is_empty() {
+        conn.execute(
+            "UPDATE chats SET name = ?1 WHERE jid = ?2 \
+             AND (name = '' OR name GLOB '[0-9]*' OR name GLOB '+[0-9]*' OR name GLOB '\u{FF0B}[0-9]*')",
+            params![name, jid],
+        )?;
+    }
+    Ok(())
+}
+
+/// Force-set chat name regardless of current value. Used for saved contact names
+/// from the user's address book, which should always take priority.
+pub fn set_name_force(conn: &Connection, jid: &str, name: &str) -> Result<()> {
     if !name.is_empty() {
         conn.execute(
             "UPDATE chats SET name = ?1 WHERE jid = ?2",

@@ -100,8 +100,14 @@ impl Store {
         chats::upsert(&self.conn, chat)
     }
 
+    /// Set chat name only if current name is a phone number.
     pub fn set_chat_name(&self, jid: &str, name: &str) -> Result<()> {
         chats::set_name(&self.conn, jid, name)
+    }
+
+    /// Force-set chat name (for saved contact names from address book).
+    pub fn set_chat_name_force(&self, jid: &str, name: &str) -> Result<()> {
+        chats::set_name_force(&self.conn, jid, name)
     }
 
     /// Bulk-resolve chat names from the contacts table.
