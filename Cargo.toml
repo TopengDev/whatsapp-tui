@@ -1,0 +1,66 @@
+[package]
+name = "whatsapp-tui"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+description = "Terminal WhatsApp client with vim keybindings"
+license = "MIT"
+
+[dependencies]
+# TUI
+ratatui = { version = "0.30", features = ["crossterm"] }
+crossterm = { version = "0.29", features = ["event-stream"] }
+
+# Async
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+async-channel = "2"
+
+# WhatsApp protocol (stable Rust — SIMD disabled)
+whatsapp-rust = { version = "0.5", default-features = false, features = [
+    "sqlite-storage", "tokio-transport", "tokio-runtime",
+    "ureq-client", "tokio-native", "signal", "moka-cache",
+] }
+wacore = { version = "0.5", default-features = false }
+waproto = "0.5"
+
+# Widgets — tui-textarea not yet compatible with ratatui 0.30
+# tui-textarea = { version = "0.7", features = ["crossterm"] }
+
+# Storage
+rusqlite = { version = "0.37", features = ["bundled"] }
+
+# Config
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+
+# Notifications
+notify-rust = "4"
+
+# Paths
+dirs = "6"
+
+# Clipboard
+arboard = "3"
+
+# QR rendering
+qrcode = "0.14"
+
+# Image rendering in terminal (Kitty/Sixel/iTerm2/halfblocks)
+ratatui-image = { version = "10", default-features = false, features = ["crossterm", "image-defaults"] }
+image = { version = "0.25", default-features = false, features = ["webp", "png", "jpeg"] }
+
+# Time formatting
+chrono = "0.4"
+
+# Error handling
+anyhow = "1"
+thiserror = "2"

@@ -1,0 +1,15 @@
+[general]
+confirm_quit = true
+timestamp_format = "%H:%M"
+
+[appearance]
+message_max_width = 80
+
+[connection]
+reconnect_max_retries = 10
+reconnect_base_delay_ms = 1000
+
+[notifications]
+desktop = true
+show_preview = true
+muted_chats = false
