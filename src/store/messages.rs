@@ -230,10 +230,7 @@ pub fn mark_edited(conn: &Connection, id: &str, new_content: &str) -> Result<()>
 }
 
 pub fn mark_deleted(conn: &Connection, id: &str) -> Result<()> {
-    conn.execute(
-        "UPDATE messages SET deleted = 1 WHERE id = ?1",
-        params![id],
-    )?;
+    conn.execute("UPDATE messages SET deleted = 1 WHERE id = ?1", params![id])?;
     Ok(())
 }
 

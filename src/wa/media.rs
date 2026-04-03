@@ -1,6 +1,5 @@
 /// Media download, cache management, xdg-open.
 /// Stubbed until whatsapp-rust is integrated.
-
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -8,14 +7,14 @@ use anyhow::Result;
 /// Get the cached path for a media file, if it exists.
 pub fn cached_path(cache_dir: &Path, message_id: &str, mime: &str) -> PathBuf {
     let ext = mime_to_ext(mime);
-    cache_dir.join("media").join(format!("{}.{}", message_id, ext))
+    cache_dir
+        .join("media")
+        .join(format!("{}.{}", message_id, ext))
 }
 
 /// Open a file with the system default application.
 pub fn open_file(path: &Path) -> Result<()> {
-    std::process::Command::new("xdg-open")
-        .arg(path)
-        .spawn()?;
+    std::process::Command::new("xdg-open").arg(path).spawn()?;
     Ok(())
 }
 

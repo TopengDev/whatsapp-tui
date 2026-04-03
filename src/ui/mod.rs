@@ -1,6 +1,6 @@
 pub mod chat_list;
-pub mod image;
 pub mod header;
+pub mod image;
 pub mod info_panel;
 pub mod input;
 pub mod layout;
@@ -55,12 +55,7 @@ fn render_overlay(frame: &mut Frame, app: &App, overlay_kind: &Overlay) {
                     overlay::command::render(frame, area, &app.command_input);
                 }
                 Overlay::Search => {
-                    overlay::search::render(
-                        frame,
-                        area,
-                        &app.search_query,
-                        &app.search_results,
-                    );
+                    overlay::search::render(frame, area, &app.search_query, &app.search_results);
                 }
                 Overlay::EmojiPicker { selected_idx } => {
                     overlay::emoji::render(frame, area, *selected_idx);

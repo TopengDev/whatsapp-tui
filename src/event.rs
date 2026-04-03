@@ -14,10 +14,7 @@ pub enum AppEvent {
     Task(TaskResult),
 
     /// Downloaded media bytes ready for inline rendering.
-    MediaData {
-        message_id: String,
-        data: Vec<u8>,
-    },
+    MediaData { message_id: String, data: Vec<u8> },
 }
 
 /// Results from spawned background tasks

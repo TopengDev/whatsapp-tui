@@ -74,9 +74,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
                 .as_deref()
                 .map(|s| s.to_string())
                 .or_else(|| active.sender_names.get(&msg.sender_jid).cloned())
-                .unwrap_or_else(|| {
-                    msg.sender_jid.split('@').next().unwrap_or("?").to_string()
-                })
+                .unwrap_or_else(|| msg.sender_jid.split('@').next().unwrap_or("?").to_string())
         };
 
         let sender_color = if msg.from_me {
@@ -86,12 +84,18 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
         };
 
         let mut header_spans = vec![
-            Span::styled(prefix, if is_selected {
-                Style::default().fg(theme::ACCENT).bg(theme::SELECTED_BG)
-            } else {
-                Style::default()
-            }),
-            Span::styled(sender_name, Style::default().fg(sender_color).patch(sel_style)),
+            Span::styled(
+                prefix,
+                if is_selected {
+                    Style::default().fg(theme::ACCENT).bg(theme::SELECTED_BG)
+                } else {
+                    Style::default()
+                },
+            ),
+            Span::styled(
+                sender_name,
+                Style::default().fg(sender_color).patch(sel_style),
+            ),
             Span::styled(format!("  {}", ts), theme::muted_style().patch(sel_style)),
         ];
 
@@ -116,7 +120,10 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
         }
 
         if msg.edited {
-            header_spans.push(Span::styled(" (edited)", theme::muted_style().patch(sel_style)));
+            header_spans.push(Span::styled(
+                " (edited)",
+                theme::muted_style().patch(sel_style),
+            ));
         }
 
         lines.push(Line::from(header_spans));
@@ -154,8 +161,10 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
                 }
             } else {
                 let type_label = msg.message_type.as_str();
-                let hint = if matches!(msg.message_type, crate::store::messages::MessageType::Sticker)
-                    && msg.media_direct_path.is_some()
+                let hint = if matches!(
+                    msg.message_type,
+                    crate::store::messages::MessageType::Sticker
+                ) && msg.media_direct_path.is_some()
                 {
                     "downloading..."
                 } else if msg.media_direct_path.is_some() {
@@ -183,11 +192,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
 
         // Reactions
         if !msg.reactions.is_empty() {
-            let reaction_text: Vec<String> = msg
-                .reactions
-                .iter()
-                .map(|r| r.emoji.clone())
-                .collect();
+            let reaction_text: Vec<String> =
+                msg.reactions.iter().map(|r| r.emoji.clone()).collect();
             lines.push(Line::from(vec![Span::styled(
                 format!("  {}", reaction_text.join(" ")),
                 Style::default().fg(theme::TEXT_SECONDARY).patch(sel_style),
@@ -203,7 +209,9 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
     let inner_height = block.inner(area).height as usize;
     let total_lines = lines.len();
     let max_scroll = total_lines.saturating_sub(inner_height);
-    let scroll = max_scroll.saturating_sub(active.scroll_from_bottom).min(max_scroll);
+    let scroll = max_scroll
+        .saturating_sub(active.scroll_from_bottom)
+        .min(max_scroll);
 
     let paragraph = Paragraph::new(lines)
         .block(block)
@@ -257,6 +265,8 @@ fn sender_color_hash(jid: &str) -> ratatui::style::Color {
         ratatui::style::Color::LightMagenta,
         ratatui::style::Color::LightCyan,
     ];
-    let hash: u32 = jid.bytes().fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32));
+    let hash: u32 = jid
+        .bytes()
+        .fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32));
     colors[(hash as usize) % colors.len()]
 }

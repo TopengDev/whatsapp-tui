@@ -3,12 +3,12 @@ use std::io;
 use std::time::Duration;
 
 use anyhow::Result;
-use ratatui_image::picker::Picker;
-use ratatui_image::protocol::StatefulProtocol;
 use crossterm::event::{Event as CrosstermEvent, KeyCode, KeyEventKind};
 use futures::StreamExt;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
+use ratatui_image::picker::Picker;
+use ratatui_image::protocol::StatefulProtocol;
 use tokio::sync::mpsc;
 use tokio::time::interval;
 
@@ -507,9 +507,7 @@ impl App {
                     // If this chat is currently open, refresh its messages
                     if let Some(ref mut active) = self.active_chat {
                         if active.jid == synced.chat.jid {
-                            if let Ok(msgs) =
-                                self.store.get_messages(&active.jid, None, 50)
-                            {
+                            if let Ok(msgs) = self.store.get_messages(&active.jid, None, 50) {
                                 active.messages = msgs;
                             }
                             if !synced.members.is_empty() {
@@ -528,15 +526,13 @@ impl App {
                 // Update contact push name if present
                 if let Some(ref push_name) = msg.sender_push_name {
                     if !msg.from_me {
-                        let _ = self.store.upsert_contact(
-                            &crate::store::contacts::Contact {
-                                jid: msg.sender_jid.clone(),
-                                name: None,
-                                push_name: Some(push_name.clone()),
-                                phone: None,
-                                profile_pic_url: None,
-                            },
-                        );
+                        let _ = self.store.upsert_contact(&crate::store::contacts::Contact {
+                            jid: msg.sender_jid.clone(),
+                            name: None,
+                            push_name: Some(push_name.clone()),
+                            phone: None,
+                            profile_pic_url: None,
+                        });
                         // For DM chats, update the chat name too
                         if !msg.chat_jid.contains("@g.us") {
                             let _ = self.store.set_chat_name(&msg.chat_jid, push_name);
@@ -551,27 +547,24 @@ impl App {
 
                 // Update only the last-message metadata on the chat — don't clobber
                 // name, muted, pinned, archived, or unread_count.
-                let preview = msg.content.as_deref().or(Some(
-                    match msg.message_type {
-                        crate::store::messages::MessageType::Image => "[Image]",
-                        crate::store::messages::MessageType::Video => "[Video]",
-                        crate::store::messages::MessageType::Audio => "[Audio]",
-                        crate::store::messages::MessageType::Document => "[Document]",
-                        crate::store::messages::MessageType::Sticker => "[Sticker]",
-                        crate::store::messages::MessageType::Location => "[Location]",
-                        crate::store::messages::MessageType::Poll => "[Poll]",
-                        crate::store::messages::MessageType::Contact => "[Contact]",
-                        _ => "[Message]",
-                    },
-                ));
+                let preview = msg.content.as_deref().or(Some(match msg.message_type {
+                    crate::store::messages::MessageType::Image => "[Image]",
+                    crate::store::messages::MessageType::Video => "[Video]",
+                    crate::store::messages::MessageType::Audio => "[Audio]",
+                    crate::store::messages::MessageType::Document => "[Document]",
+                    crate::store::messages::MessageType::Sticker => "[Sticker]",
+                    crate::store::messages::MessageType::Location => "[Location]",
+                    crate::store::messages::MessageType::Poll => "[Poll]",
+                    crate::store::messages::MessageType::Contact => "[Contact]",
+                    _ => "[Message]",
+                }));
                 let _ = self
                     .store
                     .touch_last_message(&msg.chat_jid, msg.timestamp, preview);
 
                 // If the chat doesn't exist yet (new conversation), create it
                 if !self.chats.iter().any(|c| c.jid == msg.chat_jid) {
-                    let sender_name =
-                        msg.sender_jid.split('@').next().unwrap_or("?").to_string();
+                    let sender_name = msg.sender_jid.split('@').next().unwrap_or("?").to_string();
                     let _ = self.store.upsert_chat(&Chat {
                         jid: msg.chat_jid.clone(),
                         name: sender_name,
@@ -701,8 +694,7 @@ impl App {
         match self.focus {
             AppFocus::ChatList => {
                 if !self.chats.is_empty() {
-                    self.selected_chat_idx =
-                        (self.selected_chat_idx + 1).min(self.chats.len() - 1);
+                    self.selected_chat_idx = (self.selected_chat_idx + 1).min(self.chats.len() - 1);
                 }
             }
             AppFocus::Messages => {
@@ -822,9 +814,7 @@ impl App {
             .unwrap_or_default();
 
         let mut members = if chat.is_group {
-            self.store
-                .get_group_members(&chat.jid)
-                .unwrap_or_default()
+            self.store.get_group_members(&chat.jid).unwrap_or_default()
         } else {
             Vec::new()
         };
@@ -847,10 +837,8 @@ impl App {
         let to_download: Vec<crate::store::messages::Message> = messages
             .iter()
             .filter(|m| {
-                matches!(
-                    m.message_type,
-                    crate::store::messages::MessageType::Sticker
-                ) && m.media_direct_path.is_some()
+                matches!(m.message_type, crate::store::messages::MessageType::Sticker)
+                    && m.media_direct_path.is_some()
             })
             .cloned()
             .collect();
@@ -1020,14 +1008,18 @@ impl App {
         let msg_clone = msg.clone();
         match self.wa.download_media_bytes(&msg_clone).await {
             Ok(data) => {
-                let ext = msg_clone.media_mime.as_deref().map(|m| match m {
-                    "image/webp" => "webp",
-                    "image/jpeg" => "jpg",
-                    "image/png" => "png",
-                    "video/mp4" => "mp4",
-                    "audio/ogg" => "ogg",
-                    _ => "bin",
-                }).unwrap_or("bin");
+                let ext = msg_clone
+                    .media_mime
+                    .as_deref()
+                    .map(|m| match m {
+                        "image/webp" => "webp",
+                        "image/jpeg" => "jpg",
+                        "image/png" => "png",
+                        "video/mp4" => "mp4",
+                        "audio/ogg" => "ogg",
+                        _ => "bin",
+                    })
+                    .unwrap_or("bin");
                 let cache_dir = self.config.cache_dir().join("media");
                 let _ = std::fs::create_dir_all(&cache_dir);
                 let path = cache_dir.join(format!("{}.{}", msg_clone.id, ext));
@@ -1095,9 +1087,7 @@ impl App {
 
         // Send via WhatsApp
         let send_result = if let Some(ref reply_id) = reply_to {
-            self.wa
-                .send_reply(&jid, &text, reply_id, None)
-                .await
+            self.wa.send_reply(&jid, &text, reply_id, None).await
         } else {
             self.wa.send_message(&jid, &text).await
         };

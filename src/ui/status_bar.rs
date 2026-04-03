@@ -41,7 +41,9 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let line = Line::from(vec![
         Span::styled(
             format!(" {} ", mode_label),
-            Style::default().fg(ratatui::style::Color::Black).bg(mode_color),
+            Style::default()
+                .fg(ratatui::style::Color::Black)
+                .bg(mode_color),
         ),
         Span::raw(" "),
         Span::styled(conn_label, Style::default().fg(conn_color)),
@@ -65,7 +67,9 @@ fn render_reconnecting(
     let line = Line::from(vec![
         Span::styled(
             format!(" {} ", mode_label),
-            Style::default().fg(ratatui::style::Color::Black).bg(mode_color),
+            Style::default()
+                .fg(ratatui::style::Color::Black)
+                .bg(mode_color),
         ),
         Span::raw(" "),
         Span::styled(

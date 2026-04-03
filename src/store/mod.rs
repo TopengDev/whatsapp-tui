@@ -30,12 +30,23 @@ impl Store {
         let schema = include_str!("schema.sql");
         self.conn.execute_batch(schema)?;
         // v2: add lid_jid column if missing
-        let _ = self.conn.execute("ALTER TABLE chats ADD COLUMN lid_jid TEXT", []);
+        let _ = self
+            .conn
+            .execute("ALTER TABLE chats ADD COLUMN lid_jid TEXT", []);
         // v3: add media download params to messages
-        let _ = self.conn.execute("ALTER TABLE messages ADD COLUMN media_direct_path TEXT", []);
-        let _ = self.conn.execute("ALTER TABLE messages ADD COLUMN media_key BLOB", []);
-        let _ = self.conn.execute("ALTER TABLE messages ADD COLUMN media_file_sha256 BLOB", []);
-        let _ = self.conn.execute("ALTER TABLE messages ADD COLUMN media_file_enc_sha256 BLOB", []);
+        let _ = self
+            .conn
+            .execute("ALTER TABLE messages ADD COLUMN media_direct_path TEXT", []);
+        let _ = self
+            .conn
+            .execute("ALTER TABLE messages ADD COLUMN media_key BLOB", []);
+        let _ = self
+            .conn
+            .execute("ALTER TABLE messages ADD COLUMN media_file_sha256 BLOB", []);
+        let _ = self.conn.execute(
+            "ALTER TABLE messages ADD COLUMN media_file_enc_sha256 BLOB",
+            [],
+        );
         Ok(())
     }
 
@@ -149,9 +160,9 @@ impl Store {
             }
         }
         // From chats (for groups and contacts resolved via ContactUpdate)
-        let mut stmt2 = self.conn.prepare(
-            "SELECT jid, name FROM chats WHERE name NOT GLOB '[0-9]*' AND name != ''",
-        )?;
+        let mut stmt2 = self
+            .conn
+            .prepare("SELECT jid, name FROM chats WHERE name NOT GLOB '[0-9]*' AND name != ''")?;
         let rows2 = stmt2.query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })?;

@@ -1,6 +1,5 @@
 /// Auth flow handling — QR display, pairing code input.
 /// Stubbed until whatsapp-rust is integrated.
-
 use anyhow::Result;
 
 /// Process QR code data for display in the TUI overlay.

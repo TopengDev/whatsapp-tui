@@ -38,7 +38,10 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     };
 
     let display_text = if active.input_buf.is_empty() && !in_insert {
-        Span::styled("Type a message... (i to enter insert mode)", theme::muted_style())
+        Span::styled(
+            "Type a message... (i to enter insert mode)",
+            theme::muted_style(),
+        )
     } else if active.input_buf.is_empty() {
         Span::styled("Type a message...", theme::muted_style())
     } else {

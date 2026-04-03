@@ -6,11 +6,11 @@ use tokio::sync::mpsc;
 use wacore::types::events::Event;
 use waproto::whatsapp as wa;
 use whatsapp_rust::bot::Bot;
-use whatsapp_rust::Client;
 use whatsapp_rust::store::SqliteStore;
-use whatsapp_rust::TokioRuntime;
 use whatsapp_rust::transport::TokioWebSocketTransportFactory;
 use whatsapp_rust::transport::UreqHttpClient;
+use whatsapp_rust::Client;
+use whatsapp_rust::TokioRuntime;
 
 use crate::config::Config;
 use crate::event::AppEvent;
@@ -271,12 +271,8 @@ impl WaClient {
         let file_length = msg.media_size.unwrap_or(0) as u64;
 
         let media_type = match msg.message_type {
-            crate::store::messages::MessageType::Sticker => {
-                wacore::download::MediaType::Sticker
-            }
-            crate::store::messages::MessageType::Image => {
-                wacore::download::MediaType::Image
-            }
+            crate::store::messages::MessageType::Sticker => wacore::download::MediaType::Sticker,
+            crate::store::messages::MessageType::Image => wacore::download::MediaType::Image,
             _ => wacore::download::MediaType::Image,
         };
 
@@ -314,7 +310,8 @@ impl WaClient {
             .participants
             .iter()
             .map(|p| crate::store::groups::GroupMember {
-                jid: p.phone_number
+                jid: p
+                    .phone_number
                     .as_ref()
                     .map(|pn| pn.to_string())
                     .unwrap_or_else(|| p.jid.to_string()),

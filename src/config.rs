@@ -135,9 +135,7 @@ impl Config {
     }
 
     pub fn data_dir(&self) -> PathBuf {
-        let dir = dirs::data_dir()
-            .expect("no data dir")
-            .join("whatsapp-tui");
+        let dir = dirs::data_dir().expect("no data dir").join("whatsapp-tui");
         fs::create_dir_all(&dir).expect("failed to create data dir");
         dir
     }

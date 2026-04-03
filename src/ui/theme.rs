@@ -38,7 +38,9 @@ pub fn unfocused_border() -> Style {
 }
 
 pub fn title_style() -> Style {
-    Style::default().fg(TEXT_PRIMARY).add_modifier(Modifier::BOLD)
+    Style::default()
+        .fg(TEXT_PRIMARY)
+        .add_modifier(Modifier::BOLD)
 }
 
 pub fn muted_style() -> Style {

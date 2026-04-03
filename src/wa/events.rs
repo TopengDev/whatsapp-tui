@@ -13,7 +13,9 @@ use crate::store::{
 pub enum WaEvent {
     // Connection
     Connected,
-    Disconnected { reason: String },
+    Disconnected {
+        reason: String,
+    },
     BotStopped,
     LoggedOut,
 
@@ -161,7 +163,9 @@ pub fn map_wa_event(event: Event) -> Option<WaEvent> {
                     }
                 }
                 None => {
-                    tracing::warn!("JoinedGroup: get_with_messages() returned None, trying metadata-only");
+                    tracing::warn!(
+                        "JoinedGroup: get_with_messages() returned None, trying metadata-only"
+                    );
                     if let Some(conv) = lazy_conv.get() {
                         tracing::info!("JoinedGroup fallback: jid={}", conv.id);
                         if let Some(synced) = convert_conversation(conv) {
@@ -268,7 +272,10 @@ fn convert_realtime_message(
         media_local_path: None,
         reply_to_id,
         reply_to_preview,
-        edited: matches!(info.edit, wacore::types::message::EditAttribute::MessageEdit),
+        edited: matches!(
+            info.edit,
+            wacore::types::message::EditAttribute::MessageEdit
+        ),
         deleted: false,
         from_me: info.source.is_from_me,
         status: if info.source.is_from_me {
@@ -332,10 +339,7 @@ fn convert_conversation(conv: &wa::Conversation) -> Option<SyncedChat> {
         if let Some(ref wmi) = hist_msg.message {
             // Extract push name from the other person's messages for DM chat naming
             if !is_group {
-                let is_from_me = wmi
-                    .key
-                    .from_me
-                    .unwrap_or(false);
+                let is_from_me = wmi.key.from_me.unwrap_or(false);
                 if !is_from_me {
                     if let Some(ref pn) = wmi.push_name {
                         if !pn.is_empty() {
@@ -370,9 +374,7 @@ fn convert_conversation(conv: &wa::Conversation) -> Option<SyncedChat> {
         .clone()
         .or_else(|| conv.name.clone())
         .or(best_push_name)
-        .unwrap_or_else(|| {
-            chat_jid.split('@').next().unwrap_or("?").to_string()
-        });
+        .unwrap_or_else(|| chat_jid.split('@').next().unwrap_or("?").to_string());
 
     // Sort messages by timestamp ascending
     messages.sort_by_key(|m| m.timestamp);
@@ -430,14 +432,15 @@ fn convert_conversation(conv: &wa::Conversation) -> Option<SyncedChat> {
         Vec::new()
     };
 
-    Some(SyncedChat { chat, messages, members })
+    Some(SyncedChat {
+        chat,
+        messages,
+        members,
+    })
 }
 
 /// Convert a WebMessageInfo from history sync to our domain Message.
-fn convert_history_message(
-    wmi: &wa::WebMessageInfo,
-    chat_jid: &str,
-) -> Option<Message> {
+fn convert_history_message(wmi: &wa::WebMessageInfo, chat_jid: &str) -> Option<Message> {
     let key = &wmi.key;
     let wa_msg = wmi.message.as_ref()?;
 
@@ -588,7 +591,12 @@ fn extract_reply_context(msg: &wa::Message) -> (Option<String>, Option<String>) 
 /// Extract media download parameters for stickers and images.
 fn extract_download_params(
     msg: &wa::Message,
-) -> (Option<String>, Option<Vec<u8>>, Option<Vec<u8>>, Option<Vec<u8>>) {
+) -> (
+    Option<String>,
+    Option<Vec<u8>>,
+    Option<Vec<u8>>,
+    Option<Vec<u8>>,
+) {
     if let Some(ref stk) = msg.sticker_message {
         return (
             stk.direct_path.clone(),
