@@ -505,7 +505,7 @@ impl App {
                     // If this chat is currently open, refresh its messages
                     if let Some(ref mut active) = self.active_chat {
                         if active.jid == synced.chat.jid {
-                            if let Ok(msgs) = self.store.get_messages(&active.jid, None, 50) {
+                            if let Ok(msgs) = self.store.get_messages(&active.jid, None, 200) {
                                 active.messages = msgs;
                             }
                             if !synced.members.is_empty() {
@@ -735,6 +735,32 @@ impl App {
                     active.selected_msg_idx = Some(idx);
                     let msgs_from_bottom = last.saturating_sub(idx);
                     active.scroll_from_bottom = msgs_from_bottom.saturating_mul(3);
+
+                    // Pagination: load older messages when cursor reaches the top
+                    if idx == 0 && !active.messages.is_empty() {
+                        let oldest_ts = active.messages[0].timestamp;
+                        let jid = active.jid.clone();
+                        if let Ok(older) =
+                            self.store.get_messages(&jid, Some(oldest_ts), 100)
+                        {
+                            if !older.is_empty() {
+                                let new_count = older.len();
+                                let mut combined = older;
+                                if let Some(ref mut active) = self.active_chat {
+                                    combined.append(&mut active.messages);
+                                    active.messages = combined;
+                                    // Adjust cursor to stay on the same message
+                                    active.selected_msg_idx = Some(new_count);
+                                    active.scroll_from_bottom = active
+                                        .messages
+                                        .len()
+                                        .saturating_sub(1)
+                                        .saturating_sub(new_count)
+                                        .saturating_mul(3);
+                                }
+                            }
+                        }
+                    }
                 }
             }
             _ => {}
@@ -808,7 +834,7 @@ impl App {
 
         let messages = self
             .store
-            .get_messages(&chat.jid, None, 50)
+            .get_messages(&chat.jid, None, 200)
             .unwrap_or_default();
 
         let mut members = if chat.is_group {
