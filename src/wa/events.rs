@@ -382,11 +382,7 @@ fn convert_conversation(conv: &wa::Conversation) -> Option<SyncedChat> {
     // Build preview from last message — include type label for non-text
     let last_preview = messages.last().map(|m| {
         if let Some(ref text) = m.content {
-            if text.len() > 50 {
-                format!("{}...", &text[..50])
-            } else {
-                text.clone()
-            }
+            crate::util::truncate(text, 50)
         } else {
             match m.message_type {
                 MessageType::Image => "[Image]".to_string(),

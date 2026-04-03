@@ -68,11 +68,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 
             // Preview line — truncated last message
             let preview_line = if let Some(ref preview) = chat.last_message_preview {
-                let truncated = if preview.len() > 30 {
-                    format!("{}...", &preview[..30])
-                } else {
-                    preview.clone()
-                };
+                let truncated = crate::util::truncate(preview, 30);
                 Line::from(vec![Span::styled(
                     format!(" {}", truncated),
                     theme::muted_style(),

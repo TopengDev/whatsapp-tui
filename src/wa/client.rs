@@ -68,20 +68,11 @@ impl WaClient {
                         Event::PushNameUpdate(_) => "PushNameUpdate",
                         Event::ContactUpdate(_) => "ContactUpdate",
                         Event::Receipt(_) => "Receipt",
-                        other => {
-                            // Log the actual type for debugging
-                            let dbg = format!("{:?}", other);
-                            if dbg.len() > 80 {
-                                &dbg[..80]
-                            } else {
-                                &dbg
-                            };
-                            "Other"
-                        }
+                        _other => "Other",
                     };
                     if event_tag == "Other" {
                         let dbg = format!("{:?}", &event);
-                        let preview = if dbg.len() > 120 { &dbg[..120] } else { &dbg };
+                        let preview = crate::util::truncate_bare(&dbg, 120);
                         tracing::info!("wa event Other: {}", preview);
                     } else {
                         tracing::info!("wa event: {}", event_tag);

@@ -15,7 +15,7 @@ pub fn format_qr_data(data: &str) -> Result<Vec<String>> {
 /// Process pairing code for display.
 pub fn format_pairing_code(code: &str) -> String {
     // Format as XXXX-XXXX for readability
-    if code.len() == 8 {
+    if code.chars().count() == 8 && code.is_ascii() {
         format!("{}-{}", &code[..4], &code[4..])
     } else {
         code.to_string()

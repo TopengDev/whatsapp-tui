@@ -5,6 +5,7 @@ mod keys;
 mod notify;
 mod store;
 mod ui;
+mod util;
 mod wa;
 
 use std::fs;

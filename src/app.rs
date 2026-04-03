@@ -459,12 +459,7 @@ impl App {
                 self.overlay = Some(Overlay::QrCode { data });
             }
             WaEvent::PairingCode(code) => {
-                // Format for display: XXXX-XXXX
-                let formatted = if code.len() == 8 {
-                    format!("{}-{}", &code[..4], &code[4..])
-                } else {
-                    code
-                };
+                let formatted = crate::wa::auth::format_pairing_code(&code);
                 tracing::info!("pairing code: {}", formatted);
             }
             WaEvent::AuthSuccess => {
