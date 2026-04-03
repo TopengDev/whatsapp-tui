@@ -173,29 +173,38 @@ pub fn get(
     before_ts: Option<i64>,
     limit: u32,
 ) -> Result<Vec<Message>> {
-    // Query DESC to get the N most recent, then reverse to chronological (ASC) for display.
+    // Also include messages stored under the chat's LID JID.
+    // This handles the case where earlier syncs stored messages under a LID
+    // before the phone JID mapping was available.
+    //
+    // The subquery returns NULL when there's no LID mapping, and
+    // `chat_jid = NULL` is always false, so only the primary JID matches.
+    let cols = "id, chat_jid, sender_jid, timestamp, content, message_type, \
+                media_mime, media_size, media_filename, media_local_path, \
+                reply_to_id, reply_to_preview, edited, deleted, from_me, status, \
+                media_direct_path, media_key, media_file_sha256, media_file_enc_sha256";
+
+    let jid_condition =
+        "(chat_jid = ?1 OR chat_jid = (SELECT lid_jid FROM chats WHERE jid = ?1))";
+
     let mut rows = if let Some(ts) = before_ts {
-        let mut s = conn.prepare(
-            "SELECT id, chat_jid, sender_jid, timestamp, content, message_type, \
-             media_mime, media_size, media_filename, media_local_path, \
-             reply_to_id, reply_to_preview, edited, deleted, from_me, status, \
-             media_direct_path, media_key, media_file_sha256, media_file_enc_sha256 \
-             FROM messages WHERE chat_jid = ?1 AND timestamp < ?2 \
+        let sql = format!(
+            "SELECT {} FROM messages WHERE {} AND timestamp < ?2 \
              ORDER BY timestamp DESC LIMIT ?3",
-        )?;
+            cols, jid_condition
+        );
+        let mut s = conn.prepare(&sql)?;
         let result = s
             .query_map(params![chat_jid, ts, limit], row_to_message)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         result
     } else {
-        let mut s = conn.prepare(
-            "SELECT id, chat_jid, sender_jid, timestamp, content, message_type, \
-             media_mime, media_size, media_filename, media_local_path, \
-             reply_to_id, reply_to_preview, edited, deleted, from_me, status, \
-             media_direct_path, media_key, media_file_sha256, media_file_enc_sha256 \
-             FROM messages WHERE chat_jid = ?1 \
+        let sql = format!(
+            "SELECT {} FROM messages WHERE {} \
              ORDER BY timestamp DESC LIMIT ?2",
-        )?;
+            cols, jid_condition
+        );
+        let mut s = conn.prepare(&sql)?;
         let result = s
             .query_map(params![chat_jid, limit], row_to_message)?
             .collect::<std::result::Result<Vec<_>, _>>()?;

@@ -168,6 +168,10 @@ impl App {
         // Load existing chats from store
         self.load_chats()?;
 
+        // Drain any stale terminal events that arrived during setup
+        // (e.g., leftover bytes from tmux send-keys launch).
+        while term_rx.try_recv().is_ok() {}
+
         // Main loop — connect happens after first render so the UI is visible immediately
         let mut tick = interval(Duration::from_millis(250));
         let mut connected = false;
@@ -478,6 +482,7 @@ impl App {
                         push_name: Some(name.clone()),
                         phone: None,
                         profile_pic_url: None,
+                        lid_jid: None,
                     });
                     // Update chat name: use JID@s.whatsapp.net format
                     let dm_jid = if jid.contains('@') {
@@ -520,7 +525,13 @@ impl App {
                 // Refresh chat list
                 let _ = self.load_chats();
             }
-            WaEvent::MessageReceived(msg) => {
+            WaEvent::MessageReceived(mut msg) => {
+                // Resolve LID JID → phone JID (no-ops for non-LID JIDs)
+                let resolved = self.store.resolve_lid_to_phone(&msg.chat_jid);
+                if resolved != msg.chat_jid {
+                    msg.chat_jid = resolved;
+                }
+
                 // Update contact push name if present
                 if let Some(ref push_name) = msg.sender_push_name {
                     if !msg.from_me {
@@ -530,6 +541,7 @@ impl App {
                             push_name: Some(push_name.clone()),
                             phone: None,
                             profile_pic_url: None,
+                            lid_jid: None,
                         });
                         // For DM chats, update the chat name too
                         if !msg.chat_jid.contains("@g.us") {
@@ -640,6 +652,16 @@ impl App {
                     let _ = self.store.set_chat_name(&contact.jid, name);
                     let _ = self.store.set_chat_name_by_lid(&contact.jid, name);
                 }
+
+                // If this contact has a LID→phone mapping, migrate orphaned
+                // messages that were stored under the LID JID during earlier
+                // history syncs (before the phone mapping was available).
+                if let Some(ref lid) = contact.lid_jid {
+                    let _ = self.store.migrate_lid_messages(lid, &contact.jid);
+                    // Also set the lid_jid on the phone chat for future lookups
+                    let _ = self.store.set_chat_lid(&contact.jid, lid);
+                }
+
                 // Bulk-resolve in case chats arrived after earlier ContactUpdates
                 let _ = self.store.resolve_chat_names();
                 let _ = self.load_chats();
@@ -867,6 +889,12 @@ impl App {
             .cloned()
             .collect();
 
+        let last_idx = if messages.is_empty() {
+            None
+        } else {
+            Some(messages.len() - 1)
+        };
+
         self.active_chat = Some(ActiveChat {
             jid: chat.jid.clone(),
             name: chat.name.clone(),
@@ -874,7 +902,7 @@ impl App {
             messages,
             members,
             scroll_from_bottom: 0,
-            selected_msg_idx: None,
+            selected_msg_idx: last_idx,
             input_buf: String::new(),
             reply_to: None,
             typing_jids: HashSet::new(),
@@ -1023,7 +1051,7 @@ impl App {
         if let Some(ref path) = msg.media_local_path {
             if path.exists() {
                 tracing::info!("opening media: {:?}", path);
-                let _ = std::process::Command::new("xdg-open").arg(path).spawn();
+                let _ = crate::wa::media::open_file(path);
                 return;
             }
         }
@@ -1049,7 +1077,7 @@ impl App {
                 let path = cache_dir.join(format!("{}.{}", msg_clone.id, ext));
                 if std::fs::write(&path, &data).is_ok() {
                     tracing::info!("opening media: {:?}", path);
-                    let _ = std::process::Command::new("xdg-open").arg(&path).spawn();
+                    let _ = crate::wa::media::open_file(&path);
                 }
             }
             Err(e) => {

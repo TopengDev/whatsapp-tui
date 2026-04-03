@@ -7,7 +7,7 @@ pub mod reactions;
 use std::path::Path;
 
 use anyhow::Result;
-use rusqlite::Connection;
+use rusqlite::{params, Connection};
 
 use crate::store::{
     chats::Chat, contacts::Contact, groups::GroupMember, messages::Message, reactions::Reaction,
@@ -55,9 +55,21 @@ impl Store {
     pub fn bulk_sync_chat(&self, chat: &Chat, messages: &[Message]) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
         chats::upsert(&tx, chat)?;
+
+        // Migrate orphaned LID messages to the phone JID
+        if let Some(ref lid) = chat.lid_jid {
+            if lid.contains("@lid") && !chat.jid.contains("@lid") {
+                let _ = tx.execute(
+                    "UPDATE messages SET chat_jid = ?1 WHERE chat_jid = ?2",
+                    params![chat.jid, lid],
+                );
+            }
+        }
+
         for msg in messages {
-            // Use INSERT OR IGNORE to skip duplicates silently
-            let _ = messages::insert(&tx, msg);
+            if let Err(e) = messages::insert(&tx, msg) {
+                tracing::debug!("message insert failed for {}: {}", msg.id, e);
+            }
         }
         tx.commit()?;
         Ok(())
@@ -129,6 +141,49 @@ impl Store {
 
     pub fn set_unread_count(&self, jid: &str, count: i32) -> Result<()> {
         chats::set_unread_count(&self.conn, jid, count)
+    }
+
+    /// Migrate messages from a LID chat to a phone-JID chat.
+    /// Called when we discover the LID→phone mapping via ContactUpdate.
+    pub fn migrate_lid_messages(&self, lid_jid: &str, phone_jid: &str) -> Result<usize> {
+        let changed = self.conn.execute(
+            "UPDATE messages SET chat_jid = ?1 WHERE chat_jid = ?2",
+            params![phone_jid, lid_jid],
+        )?;
+        if changed > 0 {
+            tracing::info!(
+                "migrated {} messages from LID {} to phone {}",
+                changed,
+                lid_jid,
+                phone_jid
+            );
+        }
+        Ok(changed)
+    }
+
+    /// Set the LID JID mapping on a phone-JID chat.
+    pub fn set_chat_lid(&self, jid: &str, lid_jid: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE chats SET lid_jid = ?1 WHERE jid = ?2 AND lid_jid IS NULL",
+            params![lid_jid, jid],
+        )?;
+        Ok(())
+    }
+
+    /// Resolve a LID JID to a phone JID using the chats table mapping.
+    /// Returns the phone JID if a mapping exists, otherwise returns the input unchanged.
+    pub fn resolve_lid_to_phone(&self, jid: &str) -> String {
+        if !jid.contains("@lid") {
+            return jid.to_string();
+        }
+        // Check if any phone-JID chat has this LID
+        self.conn
+            .query_row(
+                "SELECT jid FROM chats WHERE lid_jid = ?1 AND jid NOT LIKE '%@lid' LIMIT 1",
+                params![jid],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap_or_else(|_| jid.to_string())
     }
 
     pub fn set_muted(&self, jid: &str, muted: bool) -> Result<()> {

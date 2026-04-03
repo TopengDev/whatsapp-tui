@@ -8,12 +8,20 @@ pub struct Contact {
     pub push_name: Option<String>,
     pub phone: Option<String>,
     pub profile_pic_url: Option<String>,
+    /// Original LID JID when this contact was resolved from a LID→phone mapping.
+    /// Used to migrate orphaned messages stored under the LID.
+    pub lid_jid: Option<String>,
 }
 
 pub fn upsert(conn: &Connection, contact: &Contact) -> Result<()> {
     conn.execute(
-        "INSERT OR REPLACE INTO contacts (jid, name, push_name, phone, profile_pic_url) \
-         VALUES (?1, ?2, ?3, ?4, ?5)",
+        "INSERT INTO contacts (jid, name, push_name, phone, profile_pic_url) \
+         VALUES (?1, ?2, ?3, ?4, ?5) \
+         ON CONFLICT(jid) DO UPDATE SET \
+           name = COALESCE(excluded.name, contacts.name), \
+           push_name = COALESCE(excluded.push_name, contacts.push_name), \
+           phone = COALESCE(excluded.phone, contacts.phone), \
+           profile_pic_url = COALESCE(excluded.profile_pic_url, contacts.profile_pic_url)",
         params![
             contact.jid,
             contact.name,
@@ -36,6 +44,7 @@ pub fn get(conn: &Connection, jid: &str) -> Result<Option<Contact>> {
             push_name: row.get(2)?,
             phone: row.get(3)?,
             profile_pic_url: row.get(4)?,
+            lid_jid: None,
         })
     })?;
     match rows.next() {

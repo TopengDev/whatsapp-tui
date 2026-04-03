@@ -18,6 +18,9 @@ CREATE TABLE IF NOT EXISTS chats (
 CREATE INDEX IF NOT EXISTS idx_chats_order
     ON chats(pinned DESC, last_message_ts DESC);
 
+CREATE INDEX IF NOT EXISTS idx_chats_lid
+    ON chats(lid_jid);
+
 -- Contacts
 CREATE TABLE IF NOT EXISTS contacts (
     jid             TEXT PRIMARY KEY,

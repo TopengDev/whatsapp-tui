@@ -193,21 +193,28 @@ pub fn map_wa_event(event: Event) -> Option<WaEvent> {
                 .clone()
                 .or_else(|| action.first_name.clone());
             // The event JID may be a LID. pn_jid gives the phone number JID.
+            let original_jid = update.jid.to_string();
             let phone_jid = action
                 .pn_jid
                 .clone()
-                .unwrap_or_else(|| update.jid.to_string());
+                .unwrap_or_else(|| original_jid.clone());
+
+            // Preserve the LID→phone mapping so we can migrate orphaned messages
+            let lid_jid = if original_jid.contains("@lid") && phone_jid != original_jid {
+                Some(original_jid)
+            } else {
+                None
+            };
 
             if let Some(ref contact_name) = name {
                 if !contact_name.is_empty() {
-                    // Emit as ContactUpdate — this UPDATES existing chat names
-                    // but does NOT create new chat entries for contacts without chats.
                     return Some(WaEvent::ContactUpdate(Contact {
                         jid: phone_jid,
                         name: Some(contact_name.clone()),
                         push_name: None,
                         phone: None,
                         profile_pic_url: None,
+                        lid_jid,
                     }));
                 }
             }
@@ -222,6 +229,7 @@ pub fn map_wa_event(event: Event) -> Option<WaEvent> {
                 push_name: Some(update.new_push_name),
                 phone: None,
                 profile_pic_url: None,
+                lid_jid: None,
             }))
         }
 
@@ -332,7 +340,7 @@ fn convert_conversation(conv: &wa::Conversation) -> Option<SyncedChat> {
     let is_group = chat_jid.contains("@g.us");
 
     let unread = conv.unread_count.unwrap_or(0) as i32;
-    let last_ts = conv
+    let metadata_ts = conv
         .conversation_timestamp
         .map(|t| t as i64)
         .or_else(|| conv.last_msg_timestamp.map(|t| t as i64));
@@ -405,6 +413,13 @@ fn convert_conversation(conv: &wa::Conversation) -> Option<SyncedChat> {
             }
         }
     });
+
+    // Prefer the actual last message timestamp for accurate ordering,
+    // falling back to conversation metadata when no messages were decoded.
+    let last_ts = messages
+        .last()
+        .map(|m| m.timestamp)
+        .or(metadata_ts);
 
     let chat = Chat {
         jid: chat_jid,

@@ -14,7 +14,8 @@ pub fn cached_path(cache_dir: &Path, message_id: &str, mime: &str) -> PathBuf {
 
 /// Open a file with the system default application.
 pub fn open_file(path: &Path) -> Result<()> {
-    std::process::Command::new("xdg-open").arg(path).spawn()?;
+    let cmd = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+    std::process::Command::new(cmd).arg(path).spawn()?;
     Ok(())
 }
 

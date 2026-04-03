@@ -46,9 +46,18 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
     let selected_idx = active.selected_msg_idx;
     let is_focused = app.focus == AppFocus::Messages;
 
-    // Track image positions: (message_id, start_line, height)
-    let mut image_positions: Vec<(String, usize, usize)> = Vec::new();
-    let img_height = 8usize;
+    // Precompute inner width for visual line tracking
+    let inner = block.inner(area);
+    let inner_width = inner.width as usize;
+
+    // Track image positions in VISUAL lines: (message_id, visual_start, height, is_sticker)
+    let mut image_positions: Vec<(String, usize, usize, bool)> = Vec::new();
+    // Visual line count, computed for image positions and scroll
+    let mut visual_line_count: usize;
+    let visual_height = |line: &Line| -> usize {
+        let w = line.width();
+        if w == 0 || inner_width == 0 { 1 } else { (w + inner_width - 1) / inner_width }
+    };
 
     for (msg_idx, msg) in active.messages.iter().enumerate() {
         let is_selected = is_focused && selected_idx == Some(msg_idx);
@@ -151,11 +160,21 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
             // Image/sticker rendering is handled after the paragraph via StatefulImage.
             // Here we just reserve space with a placeholder.
             if active.media_cache.contains_key(&msg.id) {
-                // Reserve lines and record position for image overlay
-                image_positions.push((msg.id.clone(), lines.len(), img_height));
+                let is_sticker = matches!(
+                    msg.message_type,
+                    crate::store::messages::MessageType::Sticker
+                );
+                let img_height = if is_sticker { 8usize } else { 12usize };
+                // Snapshot current visual position (accumulated incrementally)
+                // Recompute here since lines were pushed since last update
+                visual_line_count = lines.iter().map(&visual_height).sum();
+                image_positions.push((msg.id.clone(), visual_line_count, img_height, is_sticker));
+                // Reserve space with full-width blank lines so terminal
+                // background doesn't bleed through
+                let fill = " ".repeat(inner_width);
                 for _ in 0..img_height {
                     lines.push(Line::from(vec![Span::styled(
-                        format!("{}  ", content_prefix),
+                        fill.clone(),
                         sel_style,
                     )]));
                 }
@@ -243,11 +262,16 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
         lines.push(Line::from(""));
     }
 
+    // Final visual line count for scroll calculation
+    visual_line_count = lines.iter().map(&visual_height).sum();
+
     // Calculate scroll position from bottom offset.
     // scroll_from_bottom=0 means show newest, higher = further back in history.
-    let inner_height = block.inner(area).height as usize;
-    let total_lines = lines.len();
-    let max_scroll = total_lines.saturating_sub(inner_height);
+    //
+    // Paragraph with Wrap scrolls in VISUAL (wrapped) lines, not logical lines.
+    // We must account for line wrapping to avoid clipping the bottom.
+    let inner_height = inner.height as usize;
+    let max_scroll = visual_line_count.saturating_sub(inner_height);
     let scroll = max_scroll
         .saturating_sub(active.scroll_from_bottom)
         .min(max_scroll);
@@ -260,24 +284,19 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
     frame.render_widget(paragraph, area);
 
     // Render images at their reserved positions (overlay on top of paragraph)
-    let inner = Rect {
-        x: area.x + 1, // inside border
-        y: area.y + 1,
-        width: area.width.saturating_sub(2),
-        height: area.height.saturating_sub(2),
-    };
 
     if let Some(ref mut active) = app.active_chat {
-        for (msg_id, start_line, height) in &image_positions {
+        for (msg_id, start_line, height, is_sticker) in &image_positions {
             // Calculate screen position: start_line - scroll = visible line offset
             let visible_y = (*start_line as isize) - (scroll as isize);
             if visible_y < 0 || visible_y >= inner.height as isize {
                 continue; // Off-screen
             }
+            let max_width = if *is_sticker { 20u16 } else { 50u16 };
             let img_area = Rect {
                 x: inner.x + 4, // indent
                 y: inner.y + visible_y as u16,
-                width: inner.width.saturating_sub(6).min(30),
+                width: inner.width.saturating_sub(6).min(max_width),
                 height: (*height as u16).min(inner.height.saturating_sub(visible_y as u16)),
             };
             if img_area.height == 0 || img_area.width == 0 {
