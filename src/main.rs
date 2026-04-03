@@ -54,6 +54,12 @@ fn setup_terminal() -> Result<Terminal<CrosstermBackend<io::Stdout>>> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
+    // Explicitly disable kitty keyboard protocol enhancement.
+    // It causes garbled input in Ghostty+tmux and other multiplexer combos.
+    let _ = execute!(
+        stdout,
+        crossterm::event::PopKeyboardEnhancementFlags
+    );
     let backend = CrosstermBackend::new(stdout);
     let terminal = Terminal::new(backend)?;
     Ok(terminal)

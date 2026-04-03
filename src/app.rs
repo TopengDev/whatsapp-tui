@@ -249,9 +249,12 @@ impl App {
     }
 
     async fn handle_terminal(&mut self, event: CrosstermEvent) {
-        // Only handle key press events (not release/repeat)
+        // Accept Press and Repeat, reject Release.
+        // In terminals without kitty keyboard protocol (tmux, legacy),
+        // all events arrive as Press. In kitty-enabled terminals,
+        // we get Press + Release — only Release should be ignored.
         let key = match event {
-            CrosstermEvent::Key(key) if key.kind == KeyEventKind::Press => key,
+            CrosstermEvent::Key(key) if key.kind != KeyEventKind::Release => key,
             CrosstermEvent::Resize(_, _) => return,
             _ => return,
         };
