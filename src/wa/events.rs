@@ -258,6 +258,7 @@ fn convert_realtime_message(
     let (media_mime, media_size, media_filename) = extract_media_info(wa_msg);
     let (reply_to_id, reply_to_preview) = extract_reply_context(wa_msg);
     let (dl_path, dl_key, dl_sha, dl_enc_sha) = extract_download_params(wa_msg);
+    let meta = extract_media_meta(wa_msg);
 
     Message {
         id: info.id.clone(),
@@ -293,6 +294,13 @@ fn convert_realtime_message(
         media_key: dl_key,
         media_file_sha256: dl_sha,
         media_file_enc_sha256: dl_enc_sha,
+        media_duration_secs: meta.duration_secs,
+        is_voice_note: meta.is_voice_note,
+        link_title: meta.link_title,
+        link_description: meta.link_description,
+        link_url: meta.link_url,
+        caption: meta.caption,
+        is_gif: meta.is_gif,
     }
 }
 
@@ -464,6 +472,7 @@ fn convert_history_message(wmi: &wa::WebMessageInfo, chat_jid: &str) -> Option<M
     let (media_mime, media_size, media_filename) = extract_media_info(wa_msg);
     let (reply_to_id, reply_to_preview) = extract_reply_context(wa_msg);
     let (dl_path, dl_key, dl_sha, dl_enc_sha) = extract_download_params(wa_msg);
+    let meta = extract_media_meta(wa_msg);
 
     let status_int = wmi.status.unwrap_or(0);
     let status = match status_int {
@@ -498,6 +507,13 @@ fn convert_history_message(wmi: &wa::WebMessageInfo, chat_jid: &str) -> Option<M
         media_key: dl_key,
         media_file_sha256: dl_sha,
         media_file_enc_sha256: dl_enc_sha,
+        media_duration_secs: meta.duration_secs,
+        is_voice_note: meta.is_voice_note,
+        link_title: meta.link_title,
+        link_description: meta.link_description,
+        link_url: meta.link_url,
+        caption: meta.caption,
+        is_gif: meta.is_gif,
     })
 }
 
@@ -582,6 +598,49 @@ fn extract_reply_context(msg: &wa::Message) -> (Option<String>, Option<String>) 
         }
     }
     (None, None)
+}
+
+/// Rich media metadata for display.
+pub struct MediaMeta {
+    pub duration_secs: Option<u32>,
+    pub is_voice_note: bool,
+    pub is_gif: bool,
+    pub caption: Option<String>,
+    pub link_title: Option<String>,
+    pub link_description: Option<String>,
+    pub link_url: Option<String>,
+}
+
+fn extract_media_meta(msg: &wa::Message) -> MediaMeta {
+    let mut meta = MediaMeta {
+        duration_secs: None,
+        is_voice_note: false,
+        is_gif: false,
+        caption: None,
+        link_title: None,
+        link_description: None,
+        link_url: None,
+    };
+
+    if let Some(ref vid) = msg.video_message {
+        meta.duration_secs = vid.seconds;
+        meta.caption = vid.caption.clone();
+        meta.is_gif = vid.gif_playback.unwrap_or(false);
+    }
+    if let Some(ref aud) = msg.audio_message {
+        meta.duration_secs = aud.seconds;
+        meta.is_voice_note = aud.ptt.unwrap_or(false);
+    }
+    if let Some(ref img) = msg.image_message {
+        meta.caption = img.caption.clone();
+    }
+    if let Some(ref ext) = msg.extended_text_message {
+        meta.link_title = ext.title.clone();
+        meta.link_description = ext.description.clone();
+        meta.link_url = ext.matched_text.clone();
+    }
+
+    meta
 }
 
 /// Extract media download parameters for stickers and images.

@@ -29,6 +29,20 @@ pub struct Message {
     pub media_key: Option<Vec<u8>>,
     pub media_file_sha256: Option<Vec<u8>>,
     pub media_file_enc_sha256: Option<Vec<u8>>,
+    /// Duration in seconds for video/audio messages.
+    pub media_duration_secs: Option<u32>,
+    /// Whether this is a voice note (push-to-talk) vs regular audio.
+    pub is_voice_note: bool,
+    /// Link preview title (from ExtendedTextMessage).
+    pub link_title: Option<String>,
+    /// Link preview description (from ExtendedTextMessage).
+    pub link_description: Option<String>,
+    /// Link preview URL (matched_text from ExtendedTextMessage).
+    pub link_url: Option<String>,
+    /// Caption for images/videos.
+    pub caption: Option<String>,
+    /// Whether a video is a GIF.
+    pub is_gif: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -265,5 +279,12 @@ fn row_to_message(row: &rusqlite::Row) -> rusqlite::Result<Message> {
         media_key: row.get(17)?,
         media_file_sha256: row.get(18)?,
         media_file_enc_sha256: row.get(19)?,
+        media_duration_secs: None,
+        is_voice_note: false,
+        link_title: None,
+        link_description: None,
+        link_url: None,
+        caption: None,
+        is_gif: false,
     })
 }

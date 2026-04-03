@@ -1070,6 +1070,13 @@ impl App {
             media_key: None,
             media_file_sha256: None,
             media_file_enc_sha256: None,
+            media_duration_secs: None,
+            is_voice_note: false,
+            link_title: None,
+            link_description: None,
+            link_url: None,
+            caption: None,
+            is_gif: false,
         };
 
         // Show immediately in the UI and scroll to bottom

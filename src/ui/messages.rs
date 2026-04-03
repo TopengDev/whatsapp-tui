@@ -177,11 +177,50 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
                     theme::muted_style().patch(sel_style),
                 )]));
             }
+        } else if matches!(msg.message_type, crate::store::messages::MessageType::Video) {
+            // Video: show duration, GIF flag, caption
+            let duration = format_duration(msg.media_duration_secs);
+            let label = if msg.is_gif { "GIF" } else { "Video" };
+            let hint = if msg.media_direct_path.is_some() { "'o' to play" } else { "" };
+            lines.push(Line::from(vec![Span::styled(
+                format!("{}\u{25B6} [{} {}] {}", content_prefix, label, duration, hint),
+                Style::default().fg(theme::ACCENT).patch(sel_style),
+            )]));
+            if let Some(ref cap) = msg.caption {
+                lines.push(Line::from(vec![Span::styled(
+                    format!("{}{}", content_prefix, cap),
+                    sel_style,
+                )]));
+            }
+        } else if matches!(msg.message_type, crate::store::messages::MessageType::Audio) {
+            // Audio/voice note: show duration, voice indicator
+            let duration = format_duration(msg.media_duration_secs);
+            let icon = if msg.is_voice_note { "\u{1F3A4}" } else { "\u{266B}" }; // 🎤 or ♫
+            let label = if msg.is_voice_note { "Voice" } else { "Audio" };
+            let hint = if msg.media_direct_path.is_some() { "'o' to play" } else { "" };
+            lines.push(Line::from(vec![Span::styled(
+                format!("{}{} [{} {}] {}", content_prefix, icon, label, duration, hint),
+                Style::default().fg(theme::ACCENT).patch(sel_style),
+            )]));
         } else if let Some(ref content) = msg.content {
             lines.push(Line::from(vec![Span::styled(
                 format!("{}{}", content_prefix, content),
                 sel_style,
             )]));
+            // Link preview below the text
+            if let Some(ref title) = msg.link_title {
+                lines.push(Line::from(vec![Span::styled(
+                    format!("{}  \u{1F517} {}", content_prefix, title), // 🔗
+                    Style::default().fg(theme::TEXT_SECONDARY).patch(sel_style),
+                )]));
+                if let Some(ref desc) = msg.link_description {
+                    let truncated = crate::util::truncate(desc, 60);
+                    lines.push(Line::from(vec![Span::styled(
+                        format!("{}  {}", content_prefix, truncated),
+                        theme::muted_style().patch(sel_style),
+                    )]));
+                }
+            }
         } else {
             let type_label = msg.message_type.as_str();
             lines.push(Line::from(vec![Span::styled(
@@ -269,4 +308,13 @@ fn sender_color_hash(jid: &str) -> ratatui::style::Color {
         .bytes()
         .fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32));
     colors[(hash as usize) % colors.len()]
+}
+
+/// Format seconds into M:SS or H:MM:SS.
+fn format_duration(secs: Option<u32>) -> String {
+    match secs {
+        Some(s) if s >= 3600 => format!("{}:{:02}:{:02}", s / 3600, (s % 3600) / 60, s % 60),
+        Some(s) => format!("{}:{:02}", s / 60, s % 60),
+        None => "?:??".to_string(),
+    }
 }
