@@ -150,11 +150,13 @@ pub fn set_unread_count(conn: &Connection, jid: &str, count: i32) -> Result<()> 
     Ok(())
 }
 
-/// Update chat name only if the new name is non-empty and the chat exists.
+/// Update chat name. Only overwrites if current name is a phone number
+/// or empty — never replaces a saved contact name with a push name.
 pub fn set_name(conn: &Connection, jid: &str, name: &str) -> Result<()> {
     if !name.is_empty() {
         conn.execute(
-            "UPDATE chats SET name = ?1 WHERE jid = ?2",
+            "UPDATE chats SET name = ?1 WHERE jid = ?2 \
+             AND (name = '' OR name GLOB '[0-9]*' OR name GLOB '+[0-9]*')",
             params![name, jid],
         )?;
     }

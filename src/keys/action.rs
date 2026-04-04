@@ -36,6 +36,7 @@ pub enum Action {
     DownloadMedia,
 
     // Chat management
+    FilterChats,
     MuteChat,
     ArchiveChat,
     PinChat,

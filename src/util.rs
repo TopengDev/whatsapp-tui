@@ -18,6 +18,16 @@ pub fn truncate(s: &str, max_chars: usize) -> String {
     }
 }
 
+/// Expand `~/` to the home directory.
+pub fn shellexpand(path: &str) -> String {
+    if path.starts_with("~/") {
+        if let Some(home) = dirs::home_dir() {
+            return format!("{}{}", home.display(), &path[1..]);
+        }
+    }
+    path.to_string()
+}
+
 /// Truncate a string to at most `max_chars` characters, no ellipsis.
 pub fn truncate_bare(s: &str, max_chars: usize) -> &str {
     match s.char_indices().nth(max_chars) {

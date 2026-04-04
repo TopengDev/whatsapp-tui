@@ -3,7 +3,7 @@ use std::io;
 use std::time::Duration;
 
 use anyhow::Result;
-use crossterm::event::{Event as CrosstermEvent, KeyCode, KeyEventKind};
+use crossterm::event::{Event as CrosstermEvent, KeyCode, KeyEventKind, KeyModifiers};
 use futures::StreamExt;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
@@ -78,7 +78,7 @@ pub struct ActiveChat {
     /// Currently selected message index (for cursor navigation).
     pub selected_msg_idx: Option<usize>,
     pub input_buf: String,
-    pub reply_to: Option<String>,
+    pub reply_to: Option<(String, String)>,  // (message_id, preview_text)
     pub typing_jids: HashSet<String>,
     /// JID → display name lookup for message senders.
     pub sender_names: HashMap<String, String>,
@@ -104,6 +104,8 @@ pub struct App {
     pub search_query: String,
     pub search_results: Vec<SearchResult>,
     pub show_info_panel: bool,
+    pub chat_filter: Option<String>,
+    pub chat_filter_idx: usize,
 
     // Dependencies
     pub config: Config,
@@ -138,6 +140,8 @@ impl App {
             search_query: String::new(),
             search_results: Vec::new(),
             show_info_panel: false,
+            chat_filter: None,
+            chat_filter_idx: 0,
             config,
             store,
             wa,
@@ -238,6 +242,21 @@ impl App {
         Ok(())
     }
 
+    pub fn filtered_chats(&self) -> Vec<Chat> {
+        match &self.chat_filter {
+            None => self.chats.clone(),
+            Some(q) if q.is_empty() => self.chats.clone(),
+            Some(q) => {
+                let q_lower = q.to_lowercase();
+                self.chats
+                    .iter()
+                    .filter(|c| c.name.to_lowercase().contains(&q_lower))
+                    .cloned()
+                    .collect()
+            }
+        }
+    }
+
     async fn handle_event(&mut self, event: AppEvent) {
         match event {
             AppEvent::Terminal(_) => {}
@@ -280,7 +299,23 @@ impl App {
                 self.execute_action(action).await;
             } else if let Some(ref mut active) = self.active_chat {
                 match key.code {
+                    KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::SUPER) || key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        if let Some(content) = clipboard_paste() {
+                            active.input_buf.push_str(&content);
+                        }
+                    }
                     KeyCode::Char(c) => active.input_buf.push(c),
+                    KeyCode::Backspace if key.modifiers.contains(KeyModifiers::SUPER) => {
+                        active.input_buf.clear();
+                    }
+                    KeyCode::Backspace if key.modifiers.contains(KeyModifiers::ALT) => {
+                        let trimmed = active.input_buf.trim_end().to_string();
+                        if let Some(pos) = trimmed.rfind(' ') {
+                            active.input_buf = trimmed[..pos + 1].to_string();
+                        } else {
+                            active.input_buf.clear();
+                        }
+                    }
                     KeyCode::Backspace => {
                         active.input_buf.pop();
                     }
@@ -340,6 +375,50 @@ impl App {
             return;
         }
 
+        // Chat filter mode — inline text input in chat list
+        if self.chat_filter.is_some() {
+            match key.code {
+                KeyCode::Esc => {
+                    self.chat_filter = None;
+                    self.chat_filter_idx = 0;
+                }
+                KeyCode::Enter => {
+                    let filtered = self.filtered_chats();
+                    if let Some(chat) = filtered.get(self.chat_filter_idx) {
+                        if let Some(real_idx) = self.chats.iter().position(|c| c.jid == chat.jid) {
+                            self.selected_chat_idx = real_idx;
+                        }
+                    }
+                    self.chat_filter = None;
+                    self.chat_filter_idx = 0;
+                    self.open_selected_chat().await;
+                }
+                KeyCode::Backspace => {
+                    if let Some(ref mut q) = self.chat_filter {
+                        q.pop();
+                        self.chat_filter_idx = 0;
+                    }
+                }
+                KeyCode::Down => {
+                    let count = self.filtered_chats().len();
+                    if count > 0 {
+                        self.chat_filter_idx = (self.chat_filter_idx + 1).min(count - 1);
+                    }
+                }
+                KeyCode::Up => {
+                    self.chat_filter_idx = self.chat_filter_idx.saturating_sub(1);
+                }
+                KeyCode::Char(c) => {
+                    if let Some(ref mut q) = self.chat_filter {
+                        q.push(c);
+                        self.chat_filter_idx = 0;
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+
         // Normal mode dispatch
         if let Some(action) = keys::dispatch(&key, self.mode, self.focus, &mut self.key_buffer) {
             self.execute_action(action).await;
@@ -378,6 +457,9 @@ impl App {
             Action::ExitInsert => {
                 self.mode = AppMode::Normal;
                 self.focus = AppFocus::Messages;
+                if let Some(ref mut active) = self.active_chat {
+                    active.reply_to = None;
+                }
             }
             Action::EnterCommand => {
                 self.mode = AppMode::Command;
@@ -403,6 +485,30 @@ impl App {
             Action::DownloadMedia => {
                 self.download_selected_media().await;
             }
+            Action::FilterChats => {
+                if self.focus == AppFocus::ChatList {
+                    self.chat_filter = Some(String::new());
+                    self.chat_filter_idx = 0;
+                }
+            }
+            Action::ReplyToSelected => {
+                if let Some(ref mut active) = self.active_chat {
+                    if let Some(idx) = active.selected_msg_idx {
+                        if let Some(msg) = active.messages.get(idx) {
+                            let preview = msg
+                                .content
+                                .as_deref()
+                                .unwrap_or(msg.message_type.as_str())
+                                .chars()
+                                .take(50)
+                                .collect::<String>();
+                            active.reply_to = Some((msg.id.clone(), preview));
+                            self.mode = AppMode::Insert;
+                            self.focus = AppFocus::Input;
+                        }
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -417,6 +523,16 @@ impl App {
                 self.connection_status = ConnectionStatus::Disconnected;
                 if let Err(e) = self.wa.connect().await {
                     tracing::error!("connect failed: {}", e);
+                }
+            }
+            Some("img") | Some("image") => {
+                if let Some(path) = parts.get(1) {
+                    self.send_image_file_with_caption(path.trim(), None).await;
+                }
+            }
+            Some("vid") | Some("video") => {
+                if let Some(path) = parts.get(1) {
+                    self.send_video_file_with_caption(path.trim(), None).await;
                 }
             }
             _ => {
@@ -1299,6 +1415,39 @@ impl App {
 
         active.input_buf.clear();
 
+        // Detect file path in message → send as media with caption.
+        // Scans words for a path like ~/photo.jpg or /tmp/vid.mp4.
+        // Everything else becomes the caption.
+        if let Some((file_path, caption)) = extract_media_path(&text) {
+            let ext = std::path::Path::new(&file_path)
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            let cap = if caption.is_empty() { None } else { Some(caption.as_str()) };
+            self.mode = AppMode::Normal;
+            self.focus = AppFocus::Messages;
+            match ext.as_str() {
+                "jpg" | "jpeg" | "png" | "webp" | "gif" | "bmp" => {
+                    self.send_image_file_with_caption(&file_path, cap).await;
+                    return;
+                }
+                "mp4" | "mov" | "avi" | "mkv" | "webm" | "3gp" => {
+                    self.send_video_file_with_caption(&file_path, cap).await;
+                    return;
+                }
+                "mp3" | "ogg" | "m4a" | "aac" | "wav" | "opus" => {
+                    self.send_audio_file(&file_path).await;
+                    return;
+                }
+                _ => {
+                    // All other file types → send as document
+                    self.send_document_file(&file_path).await;
+                    return;
+                }
+            }
+        }
+
         // Create a local pending message for immediate display
         let local_id = format!("pending_{}", chrono::Utc::now().timestamp_millis());
         let jid = active.jid.clone();
@@ -1315,8 +1464,8 @@ impl App {
             media_size: None,
             media_filename: None,
             media_local_path: None,
-            reply_to_id: reply_to.clone(),
-            reply_to_preview: None,
+            reply_to_id: reply_to.as_ref().map(|(id, _)| id.clone()),
+            reply_to_preview: reply_to.as_ref().map(|(_, p)| p.clone()),
             edited: false,
             deleted: false,
             from_me: true,
@@ -1346,8 +1495,8 @@ impl App {
         self.focus = AppFocus::Messages;
 
         // Send via WhatsApp
-        let send_result = if let Some(ref reply_id) = reply_to {
-            self.wa.send_reply(&jid, &text, reply_id, None).await
+        let send_result = if let Some((ref reply_id, ref preview)) = reply_to {
+            self.wa.send_reply(&jid, &text, reply_id, Some(preview.as_str())).await
         } else {
             self.wa.send_message(&jid, &text).await
         };
@@ -1380,6 +1529,201 @@ impl App {
         }
     }
 
+    /// Create a pending media message in the UI, upload, then update status.
+    fn push_pending_media(&mut self, label: &str, msg_type: crate::store::messages::MessageType) -> Option<(String, String)> {
+        let active = self.active_chat.as_mut()?;
+        let local_id = format!("pending_{}", chrono::Utc::now().timestamp_millis());
+        let jid = active.jid.clone();
+        active.messages.push(Message {
+            id: local_id.clone(),
+            chat_jid: jid.clone(),
+            sender_jid: "me".to_string(),
+            timestamp: chrono::Utc::now().timestamp(),
+            content: Some(format!("⏳ Uploading {}...", label)),
+            message_type: msg_type,
+            media_mime: None, media_size: None, media_filename: None,
+            media_local_path: None, reply_to_id: None, reply_to_preview: None,
+            edited: false, deleted: false, from_me: true,
+            status: crate::store::messages::MessageStatus::Pending,
+            reactions: Vec::new(), sender_push_name: None,
+            media_direct_path: None, media_key: None,
+            media_file_sha256: None, media_file_enc_sha256: None,
+            media_duration_secs: None, is_voice_note: false,
+            link_title: None, link_description: None, link_url: None,
+            caption: None, is_gif: false, media_dimensions: None,
+        });
+        active.scroll_from_bottom = 0;
+        Some((local_id, jid))
+    }
+
+    fn update_pending_media(&mut self, local_id: &str, real_id: &str, label: &str) {
+        if let Some(ref mut active) = self.active_chat {
+            if let Some(m) = active.messages.iter_mut().find(|m| m.id == local_id) {
+                m.id = real_id.to_string();
+                m.status = crate::store::messages::MessageStatus::Sent;
+                m.content = Some(label.to_string());
+            }
+        }
+    }
+
+    fn store_sent_media(&self, msg_id: &str, jid: &str, content: &str) {
+        // Store as Text — we don't have download params for re-rendering,
+        // so the label (e.g. "[Image: photo.jpg]") is the persisted content.
+        let msg = Message {
+            id: msg_id.to_string(),
+            chat_jid: jid.to_string(),
+            sender_jid: "me".to_string(),
+            timestamp: chrono::Utc::now().timestamp(),
+            content: Some(content.to_string()),
+            message_type: crate::store::messages::MessageType::Text,
+            media_mime: None, media_size: None, media_filename: None,
+            media_local_path: None, reply_to_id: None, reply_to_preview: None,
+            edited: false, deleted: false, from_me: true,
+            status: crate::store::messages::MessageStatus::Sent,
+            reactions: Vec::new(), sender_push_name: None,
+            media_direct_path: None, media_key: None,
+            media_file_sha256: None, media_file_enc_sha256: None,
+            media_duration_secs: None, is_voice_note: false,
+            link_title: None, link_description: None, link_url: None,
+            caption: None, is_gif: false, media_dimensions: None,
+        };
+        let _ = self.store.insert_message(&msg);
+    }
+
+    fn fail_pending_media(&mut self, local_id: &str, error: &str) {
+        if let Some(ref mut active) = self.active_chat {
+            if let Some(m) = active.messages.iter_mut().find(|m| m.id == local_id) {
+                m.status = crate::store::messages::MessageStatus::Failed;
+                m.content = Some(format!("✗ {}", error));
+            }
+        }
+    }
+
+    async fn send_image_file_with_caption(&mut self, path: &str, caption: Option<&str>) {
+        let path = std::path::PathBuf::from(crate::util::shellexpand(path));
+        if !path.exists() { return; }
+        let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("image").to_string();
+        let (local_id, jid) = match self.push_pending_media(&filename, crate::store::messages::MessageType::Image) {
+            Some(v) => v, None => return,
+        };
+
+        let data = match std::fs::read(&path) { Ok(d) => d, Err(e) => { self.fail_pending_media(&local_id, &e.to_string()); return; } };
+        let mime = match path.extension().and_then(|e| e.to_str()) {
+            Some("jpg") | Some("jpeg") => "image/jpeg", Some("png") => "image/png",
+            Some("webp") => "image/webp", _ => "image/jpeg",
+        };
+        // Cache the image for inline rendering before upload consumes the data
+        if let Some((proto, w, h)) = crate::ui::image::create_protocol(&self.picker, &data) {
+            if let Some(ref mut active) = self.active_chat {
+                active.media_cache.insert(local_id.clone(), (proto, w, h));
+            }
+        }
+        let (thumb, width, height) = match image::load_from_memory(&data) {
+            Ok(img) => {
+                let (w, h) = (img.width(), img.height());
+                let t = img.thumbnail(72, 72);
+                let mut buf = std::io::Cursor::new(Vec::new());
+                let _ = t.write_to(&mut buf, image::ImageFormat::Jpeg);
+                (Some(buf.into_inner()), w, h)
+            }
+            Err(_) => (None, 0, 0),
+        };
+
+        match self.wa.send_image(&jid, data, mime, caption, thumb, width, height).await {
+            Ok(id) => {
+                let label = caption.map(|c| format!("[Image] {}", c)).unwrap_or_else(|| format!("[Image: {}]", filename));
+                if let Some(ref mut active) = self.active_chat {
+                    if let Some(proto) = active.media_cache.remove(&local_id) {
+                        active.media_cache.insert(id.clone(), proto);
+                    }
+                }
+                self.update_pending_media(&local_id, &id, &label);
+                self.store_sent_media(&id, &jid, &label);
+                let _ = self.store.touch_last_message(&jid, chrono::Utc::now().timestamp(), Some(&label));
+                let _ = self.load_chats();
+            }
+            Err(e) => self.fail_pending_media(&local_id, &format!("Send failed: {}", e)),
+        }
+    }
+
+    async fn send_video_file_with_caption(&mut self, path: &str, caption: Option<&str>) {
+        let path = std::path::PathBuf::from(crate::util::shellexpand(path));
+        if !path.exists() { return; }
+        let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("video").to_string();
+        let (local_id, jid) = match self.push_pending_media(&filename, crate::store::messages::MessageType::Video) {
+            Some(v) => v, None => return,
+        };
+
+        let data = match std::fs::read(&path) { Ok(d) => d, Err(e) => { self.fail_pending_media(&local_id, &e.to_string()); return; } };
+        let mime = match path.extension().and_then(|e| e.to_str()) {
+            Some("mp4") => "video/mp4", Some("mov") => "video/quicktime", _ => "video/mp4",
+        };
+
+        match self.wa.send_video(&jid, data, mime, caption).await {
+            Ok(id) => {
+                let label = caption.map(|c| format!("[Video] {}", c)).unwrap_or_else(|| format!("[Video: {}]", filename));
+                self.update_pending_media(&local_id, &id, &label);
+                self.store_sent_media(&id, &jid, &label);
+                let _ = self.store.touch_last_message(&jid, chrono::Utc::now().timestamp(), Some(&label));
+                let _ = self.load_chats();
+            }
+            Err(e) => self.fail_pending_media(&local_id, &format!("Send failed: {}", e)),
+        }
+    }
+
+    async fn send_audio_file(&mut self, path: &str) {
+        let path = std::path::PathBuf::from(crate::util::shellexpand(path));
+        if !path.exists() { return; }
+        let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("audio").to_string();
+        let (local_id, jid) = match self.push_pending_media(&filename, crate::store::messages::MessageType::Audio) {
+            Some(v) => v, None => return,
+        };
+
+        let data = match std::fs::read(&path) { Ok(d) => d, Err(e) => { self.fail_pending_media(&local_id, &e.to_string()); return; } };
+        let mime = match path.extension().and_then(|e| e.to_str()) {
+            Some("mp3") => "audio/mpeg", Some("ogg") | Some("opus") => "audio/ogg; codecs=opus",
+            Some("m4a") | Some("aac") => "audio/mp4", Some("wav") => "audio/wav", _ => "audio/mpeg",
+        };
+
+        match self.wa.send_audio(&jid, data, mime).await {
+            Ok(id) => {
+                let label = format!("[Audio: {}]", filename);
+                self.update_pending_media(&local_id, &id, &label);
+                self.store_sent_media(&id, &jid, &label);
+                let _ = self.store.touch_last_message(&jid, chrono::Utc::now().timestamp(), Some(&label));
+                let _ = self.load_chats();
+            }
+            Err(e) => self.fail_pending_media(&local_id, &format!("Send failed: {}", e)),
+        }
+    }
+
+    async fn send_document_file(&mut self, path: &str) {
+        let path = std::path::PathBuf::from(crate::util::shellexpand(path));
+        if !path.exists() { return; }
+        let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("file").to_string();
+        let (local_id, jid) = match self.push_pending_media(&filename, crate::store::messages::MessageType::Document) {
+            Some(v) => v, None => return,
+        };
+
+        let data = match std::fs::read(&path) { Ok(d) => d, Err(e) => { self.fail_pending_media(&local_id, &e.to_string()); return; } };
+        let mime = match path.extension().and_then(|e| e.to_str()) {
+            Some("pdf") => "application/pdf", Some("doc") | Some("docx") => "application/msword",
+            Some("xls") | Some("xlsx") => "application/vnd.ms-excel",
+            Some("zip") => "application/zip", _ => "application/octet-stream",
+        };
+
+        match self.wa.send_document(&jid, data, mime, &filename).await {
+            Ok(id) => {
+                let label = format!("[{}]", filename);
+                self.update_pending_media(&local_id, &id, &label);
+                self.store_sent_media(&id, &jid, &label);
+                let _ = self.store.touch_last_message(&jid, chrono::Utc::now().timestamp(), Some(&label));
+                let _ = self.load_chats();
+            }
+            Err(e) => self.fail_pending_media(&local_id, &format!("Send failed: {}", e)),
+        }
+    }
+
     fn perform_search(&mut self) {
         if self.search_query.is_empty() {
             return;
@@ -1400,4 +1744,101 @@ impl App {
             }
         }
     }
+}
+
+/// Paste from macOS clipboard. Returns text content, or saves image to temp file and returns path.
+fn clipboard_paste() -> Option<String> {
+    // Check for image in clipboard first
+    let has_image = std::process::Command::new("osascript")
+        .args(["-e", "clipboard info"])
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).contains("«class PNGf»") || String::from_utf8_lossy(&o.stdout).contains("«class TIFF»"))
+        .unwrap_or(false);
+
+    if has_image {
+        // Save clipboard image to temp file
+        let tmp = format!("/tmp/wa-clipboard-{}.png", chrono::Utc::now().timestamp_millis());
+        let script = format!(
+            "set theFile to POSIX file \"{}\" as text\n\
+             set fp to open for access file theFile with write permission\n\
+             write (the clipboard as «class PNGf») to fp\n\
+             close access fp",
+            tmp
+        );
+        if std::process::Command::new("osascript")
+            .args(["-e", &script])
+            .output()
+            .ok()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+        {
+            return Some(tmp);
+        }
+    }
+
+    // Fall back to text paste
+    std::process::Command::new("pbpaste")
+        .output()
+        .ok()
+        .and_then(|o| {
+            if o.status.success() {
+                let s = String::from_utf8_lossy(&o.stdout).to_string();
+                if s.is_empty() { None } else { Some(s) }
+            } else {
+                None
+            }
+        })
+}
+
+/// Scan a message for a media file path. Returns (file_path, caption).
+/// Supports bare paths, ~/paths, and '/quoted paths with spaces'.
+fn extract_media_path(text: &str) -> Option<(String, String)> {
+    let media_exts = [
+        "jpg", "jpeg", "png", "webp", "gif", "bmp",          // images
+        "mp4", "mov", "avi", "mkv", "webm", "3gp",            // video
+        "mp3", "ogg", "m4a", "aac", "wav", "opus",            // audio
+        "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",   // documents
+        "zip", "tar", "gz",                                     // archives
+    ];
+
+    // Try quoted path first: 'path with spaces.mp4' or "path with spaces.mp4"
+    for quote in ['\'', '"'] {
+        if let Some(start) = text.find(quote) {
+            if let Some(end) = text[start + 1..].find(quote) {
+                let path_str = &text[start + 1..start + 1 + end];
+                let expanded = crate::util::shellexpand(path_str);
+                let p = std::path::Path::new(&expanded);
+                if let Some(ext) = p.extension().and_then(|e| e.to_str()) {
+                    if media_exts.contains(&ext.to_lowercase().as_str()) && p.is_file() {
+                        let caption = format!(
+                            "{} {}",
+                            text[..start].trim(),
+                            text[start + 1 + end + 1..].trim()
+                        )
+                        .trim()
+                        .to_string();
+                        return Some((expanded, caption));
+                    }
+                }
+            }
+        }
+    }
+
+    // Try bare paths (no spaces)
+    for word in text.split_whitespace() {
+        let expanded = crate::util::shellexpand(word);
+        let p = std::path::Path::new(&expanded);
+        if let Some(ext) = p.extension().and_then(|e| e.to_str()) {
+            if media_exts.contains(&ext.to_lowercase().as_str()) && p.is_file() {
+                let caption = text
+                    .replace(word, "")
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                return Some((expanded, caption));
+            }
+        }
+    }
+    None
 }

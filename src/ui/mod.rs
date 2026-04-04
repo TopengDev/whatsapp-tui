@@ -29,7 +29,12 @@ fn render_main(frame: &mut Frame, app: &mut App) {
     chat_list::render(frame, chunks[0], app);
 
     // Split chat area into header + messages + input + status bar
-    let chat_chunks = layout::chat_area_layout(chunks[1]);
+    let is_replying = app
+        .active_chat
+        .as_ref()
+        .map_or(false, |c| c.reply_to.is_some());
+    let input_height = if is_replying { 4 } else { 3 };
+    let chat_chunks = layout::chat_area_layout(chunks[1], input_height);
 
     header::render(frame, chat_chunks[0], app);
     messages::render(frame, chat_chunks[1], app);

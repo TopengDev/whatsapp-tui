@@ -64,51 +64,45 @@ impl Store {
     }
 
     /// Merge LID DM chats into their phone-JID counterparts.
-    /// Detects duplicates by matching contacts with the same name
-    /// across LID and phone JID chats.
+    /// Detects duplicates by finding LID chats whose messages interleave
+    /// temporally with a phone-JID chat (same conversation, split by LID).
     pub fn merge_lid_duplicates(&self) -> Result<usize> {
-        // Find LID DM chats that have a phone-JID chat with the same contact name
-        let merged = self.conn.execute(
-            "UPDATE messages SET chat_jid = ( \
-                SELECT c2.jid FROM chats c2 \
-                JOIN contacts ct ON ct.jid = c2.jid \
-                WHERE c2.jid LIKE '%@s.whatsapp.net' AND c2.is_group = 0 \
-                AND ct.name = (SELECT ct2.name FROM contacts ct2 WHERE ct2.jid = messages.chat_jid) \
-                LIMIT 1 \
-            ) \
-            WHERE chat_jid LIKE '%@lid' \
-            AND chat_jid NOT LIKE '%@g.us' \
-            AND chat_jid != 'status@broadcast' \
-            AND EXISTS ( \
-                SELECT 1 FROM chats c2 \
-                JOIN contacts ct ON ct.jid = c2.jid \
-                WHERE c2.jid LIKE '%@s.whatsapp.net' AND c2.is_group = 0 \
-                AND ct.name = (SELECT ct2.name FROM contacts ct2 WHERE ct2.jid = messages.chat_jid) \
-            )",
-            [],
+        // Find LID DM chats that have messages temporally interleaved
+        // with a phone-JID DM chat (user's messages go to phone chat,
+        // counterparty's replies go to LID chat).
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT lid.jid as lid_jid, phone.jid as phone_jid \
+             FROM chats lid \
+             JOIN chats phone ON phone.jid LIKE '%@s.whatsapp.net' AND phone.is_group = 0 \
+             WHERE lid.jid LIKE '%@lid' AND lid.jid != 'status@broadcast' \
+             AND phone.lid_jid IS NULL \
+             AND EXISTS ( \
+                 SELECT 1 FROM messages m_lid \
+                 JOIN messages m_phone ON m_phone.chat_jid = phone.jid \
+                 WHERE m_lid.chat_jid = lid.jid \
+                 AND m_lid.from_me = 0 AND m_phone.from_me = 1 \
+                 AND ABS(m_lid.timestamp - m_phone.timestamp) < 300 \
+             )",
         )?;
-        if merged > 0 {
-            // Set lid_jid on the phone chats for future resolution
+        let pairs: Vec<(String, String)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        let mut total = 0usize;
+        for (lid_jid, phone_jid) in &pairs {
+            let moved = self.conn.execute(
+                "UPDATE messages SET chat_jid = ?1 WHERE chat_jid = ?2",
+                params![phone_jid, lid_jid],
+            )?;
             let _ = self.conn.execute(
-                "UPDATE chats SET lid_jid = ( \
-                    SELECT lid.jid FROM chats lid \
-                    JOIN contacts ct1 ON ct1.jid = lid.jid \
-                    JOIN contacts ct2 ON ct2.jid = chats.jid \
-                    WHERE lid.jid LIKE '%@lid' AND ct1.name = ct2.name \
-                    LIMIT 1 \
-                ) \
-                WHERE jid LIKE '%@s.whatsapp.net' AND is_group = 0 AND lid_jid IS NULL \
-                AND EXISTS ( \
-                    SELECT 1 FROM chats lid \
-                    JOIN contacts ct1 ON ct1.jid = lid.jid \
-                    JOIN contacts ct2 ON ct2.jid = chats.jid \
-                    WHERE lid.jid LIKE '%@lid' AND ct1.name = ct2.name \
-                )",
-                [],
+                "UPDATE chats SET lid_jid = ?1 WHERE jid = ?2 AND lid_jid IS NULL",
+                params![lid_jid, phone_jid],
             );
-            tracing::info!("merged {} LID duplicate messages", merged);
+            total += moved;
+            tracing::info!("merged LID {} → {} ({} msgs)", lid_jid, phone_jid, moved);
         }
-        Ok(merged)
+        Ok(total)
     }
 
     /// Bulk-insert a chat and its messages inside a single transaction.

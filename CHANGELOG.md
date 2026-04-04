@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.0] - 2026-04-04
+
+### Added
+
+- Chat search/filter (`f` key) — inline filter in chat list sidebar with real-time name matching
+- Reply to message (`r` key) — select message, press `r`, type reply with quoted preview
+- Send images, videos, audio, and documents via input bar — type file path or paste with caption
+- Command mode media send (`:img`, `:vid` commands)
+- Clipboard paste (`Cmd+V` / `Ctrl+V`) — text or image from clipboard
+- Word delete (`Option+Backspace`) and line delete (`Cmd+Backspace`) in insert mode
+- Quoted path support for filenames with spaces (`'/path/with spaces.mp4'`)
+- Upload progress indicator (`⏳ Uploading...`) with success/failure status
+- Sent media persistence in chat history
+
+### Fixed
+
+- Chat name not overwritten by push names when a saved contact name exists
+- LID duplicate chats merged via temporal message interleaving detection
+
 ## [0.1.4] - 2026-04-04
 
 ### Fixed
@@ -78,6 +97,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Desktop notifications
 - SQLite storage with FTS5 search
 
+[0.2.0]: https://github.com/TopengDev/whatsapp-tui/releases/tag/v0.2.0
 [0.1.4]: https://github.com/TopengDev/whatsapp-tui/releases/tag/v0.1.4
 [0.1.3]: https://github.com/TopengDev/whatsapp-tui/releases/tag/v0.1.3
 [0.1.2]: https://github.com/TopengDev/whatsapp-tui/releases/tag/v0.1.2

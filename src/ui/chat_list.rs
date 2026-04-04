@@ -1,7 +1,7 @@
-use ratatui::layout::Rect;
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
+use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
 use crate::app::{App, AppFocus};
@@ -9,30 +9,64 @@ use crate::ui::theme;
 
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let focused = app.focus == AppFocus::ChatList;
-    let border_style = if focused {
+    let filtering = app.chat_filter.is_some();
+    let border_style = if focused || filtering {
         theme::focused_border()
     } else {
         theme::unfocused_border()
     };
 
-    let block = Block::default()
-        .title(" Chats ")
-        .title_style(theme::title_style())
-        .borders(Borders::ALL)
-        .border_style(border_style);
+    let make_block = || {
+        Block::default()
+            .title(if filtering { " Find Chat " } else { " Chats " })
+            .title_style(theme::title_style())
+            .borders(Borders::ALL)
+            .border_style(border_style)
+    };
 
-    if app.chats.is_empty() {
+    // When filtering, render border + filter input, list goes in inner area
+    let list_area = if filtering {
+        let block = make_block();
+        let inner = block.inner(area);
+        let chunks = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(inner);
+        frame.render_widget(block, area);
+
+        if let Some(ref query) = app.chat_filter {
+            let filter_line = Line::from(vec![
+                Span::styled(" / ", Style::default().fg(theme::ACCENT)),
+                Span::raw(query),
+                Span::styled("█", Style::default().fg(theme::TEXT_PRIMARY)),
+            ]);
+            frame.render_widget(Paragraph::new(filter_line), chunks[0]);
+        }
+        chunks[1]
+    } else {
+        area
+    };
+
+    let display_chats = if filtering {
+        app.filtered_chats()
+    } else {
+        app.chats.clone()
+    };
+    let selected_idx = if filtering { app.chat_filter_idx } else { app.selected_chat_idx };
+
+    if display_chats.is_empty() {
+        let msg = if filtering { "No matches" } else { "No chats yet" };
         let items: Vec<ListItem> = vec![ListItem::new(Line::from(vec![Span::styled(
-            "No chats yet",
+            msg,
             theme::muted_style(),
         )]))];
-        let list = List::new(items).block(block);
-        frame.render_widget(list, area);
+        let list = if filtering {
+            List::new(items)
+        } else {
+            List::new(items).block(make_block())
+        };
+        frame.render_widget(list, list_area);
         return;
     }
 
-    let items: Vec<ListItem> = app
-        .chats
+    let items: Vec<ListItem> = display_chats
         .iter()
         .enumerate()
         .map(|(i, chat)| {
@@ -44,7 +78,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             }
 
             // Chat name
-            let name_style = if i == app.selected_chat_idx && focused {
+            let name_style = if i == selected_idx && (focused || filtering) {
                 theme::selected_style().add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(theme::TEXT_PRIMARY)
@@ -82,11 +116,14 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         .collect();
 
     let mut state = ListState::default();
-    state.select(Some(app.selected_chat_idx));
+    state.select(Some(selected_idx));
 
-    let list = List::new(items)
-        .block(block)
-        .highlight_style(theme::selected_style());
+    let list = List::new(items).highlight_style(theme::selected_style());
+    let list = if filtering {
+        list
+    } else {
+        list.block(make_block())
+    };
 
-    frame.render_stateful_widget(list, area, &mut state);
+    frame.render_stateful_widget(list, list_area, &mut state);
 }

@@ -281,6 +281,148 @@ impl WaClient {
         Ok(data)
     }
 
+    /// Send an image with optional caption. Returns the message ID.
+    pub async fn send_image(
+        &self,
+        chat_jid: &str,
+        data: Vec<u8>,
+        mime: &str,
+        caption: Option<&str>,
+        thumbnail: Option<Vec<u8>>,
+        width: u32,
+        height: u32,
+    ) -> Result<String> {
+        let client = self
+            .client
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("not connected"))?;
+
+        let jid = chat_jid
+            .parse()
+            .map_err(|e| anyhow::anyhow!("invalid JID: {:?}", e))?;
+
+        let upload = client
+            .upload(data, wacore::download::MediaType::Image)
+            .await?;
+
+        let msg = wa::Message {
+            image_message: Some(Box::new(wa::message::ImageMessage {
+                url: Some(upload.url),
+                direct_path: Some(upload.direct_path),
+                media_key: Some(upload.media_key),
+                file_sha256: Some(upload.file_sha256),
+                file_enc_sha256: Some(upload.file_enc_sha256),
+                file_length: Some(upload.file_length),
+                mimetype: Some(mime.to_string()),
+                caption: caption.map(|s| s.to_string()),
+                jpeg_thumbnail: thumbnail,
+                width: Some(width),
+                height: Some(height),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+
+        let msg_id = client.send_message(jid, msg).await?;
+        Ok(msg_id)
+    }
+
+    /// Send a video with optional caption. Returns the message ID.
+    pub async fn send_video(
+        &self,
+        chat_jid: &str,
+        data: Vec<u8>,
+        mime: &str,
+        caption: Option<&str>,
+    ) -> Result<String> {
+        let client = self
+            .client
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("not connected"))?;
+
+        let jid = chat_jid
+            .parse()
+            .map_err(|e| anyhow::anyhow!("invalid JID: {:?}", e))?;
+
+        let upload = client
+            .upload(data, wacore::download::MediaType::Video)
+            .await?;
+
+        let msg = wa::Message {
+            video_message: Some(Box::new(wa::message::VideoMessage {
+                url: Some(upload.url),
+                direct_path: Some(upload.direct_path),
+                media_key: Some(upload.media_key),
+                file_sha256: Some(upload.file_sha256),
+                file_enc_sha256: Some(upload.file_enc_sha256),
+                file_length: Some(upload.file_length),
+                mimetype: Some(mime.to_string()),
+                caption: caption.map(|s| s.to_string()),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+
+        let msg_id = client.send_message(jid, msg).await?;
+        Ok(msg_id)
+    }
+
+    /// Send an audio file. Returns the message ID.
+    pub async fn send_audio(
+        &self,
+        chat_jid: &str,
+        data: Vec<u8>,
+        mime: &str,
+    ) -> Result<String> {
+        let client = self.client.as_ref().ok_or_else(|| anyhow::anyhow!("not connected"))?;
+        let jid = chat_jid.parse().map_err(|e| anyhow::anyhow!("invalid JID: {:?}", e))?;
+        let upload = client.upload(data, wacore::download::MediaType::Audio).await?;
+        let msg = wa::Message {
+            audio_message: Some(Box::new(wa::message::AudioMessage {
+                url: Some(upload.url),
+                direct_path: Some(upload.direct_path),
+                media_key: Some(upload.media_key),
+                file_sha256: Some(upload.file_sha256),
+                file_enc_sha256: Some(upload.file_enc_sha256),
+                file_length: Some(upload.file_length),
+                mimetype: Some(mime.to_string()),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        let msg_id = client.send_message(jid, msg).await?;
+        Ok(msg_id)
+    }
+
+    /// Send a document file. Returns the message ID.
+    pub async fn send_document(
+        &self,
+        chat_jid: &str,
+        data: Vec<u8>,
+        mime: &str,
+        filename: &str,
+    ) -> Result<String> {
+        let client = self.client.as_ref().ok_or_else(|| anyhow::anyhow!("not connected"))?;
+        let jid = chat_jid.parse().map_err(|e| anyhow::anyhow!("invalid JID: {:?}", e))?;
+        let upload = client.upload(data, wacore::download::MediaType::Document).await?;
+        let msg = wa::Message {
+            document_message: Some(Box::new(wa::message::DocumentMessage {
+                url: Some(upload.url),
+                direct_path: Some(upload.direct_path),
+                media_key: Some(upload.media_key),
+                file_sha256: Some(upload.file_sha256),
+                file_enc_sha256: Some(upload.file_enc_sha256),
+                file_length: Some(upload.file_length),
+                mimetype: Some(mime.to_string()),
+                file_name: Some(filename.to_string()),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        let msg_id = client.send_message(jid, msg).await?;
+        Ok(msg_id)
+    }
+
     /// Fetch group metadata (participants, subject, etc.) from the server.
     /// Returns (subject, members).
     pub async fn get_group_info(

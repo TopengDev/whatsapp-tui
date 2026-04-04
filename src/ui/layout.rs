@@ -18,12 +18,12 @@ pub fn main_layout(area: Rect, show_info_panel: bool) -> Vec<Rect> {
 }
 
 /// Split the chat area into: header | messages | input | status_bar.
-pub fn chat_area_layout(area: Rect) -> Vec<Rect> {
+pub fn chat_area_layout(area: Rect, input_height: u16) -> Vec<Rect> {
     Layout::vertical([
-        Constraint::Length(1), // header
-        Constraint::Min(1),    // messages
-        Constraint::Length(3), // input
-        Constraint::Length(1), // status bar
+        Constraint::Length(1),            // header
+        Constraint::Min(1),               // messages
+        Constraint::Length(input_height),  // input (3 normal, 4 when replying)
+        Constraint::Length(1),            // status bar
     ])
     .split(area)
     .to_vec()

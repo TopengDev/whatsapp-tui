@@ -66,6 +66,7 @@ fn dispatch_normal(key: &KeyEvent, _focus: AppFocus, pending: &mut KeyBuffer) ->
         KeyCode::Char('y') => Some(Action::YankSelected),
         KeyCode::Char('o') => Some(Action::OpenMedia),
         KeyCode::Char('d') => Some(Action::DownloadMedia),
+        KeyCode::Char('f') => Some(Action::FilterChats),
 
         // Chat management
         KeyCode::Char('m') => Some(Action::MuteChat),

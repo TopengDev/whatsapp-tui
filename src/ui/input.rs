@@ -51,10 +51,13 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let mut lines = Vec::new();
 
     // Show reply indicator if replying
-    if let Some(ref reply_id) = active.reply_to {
+    if let Some((ref _id, ref preview)) = active.reply_to {
         lines.push(Line::from(vec![
-            Span::styled("Replying to ", theme::muted_style()),
-            Span::styled(reply_id.as_str(), Style::default().fg(theme::ACCENT)),
+            Span::styled(" > ", theme::muted_style()),
+            Span::styled(
+                crate::util::truncate(preview, 40),
+                Style::default().fg(theme::ACCENT),
+            ),
         ]));
     }
 
