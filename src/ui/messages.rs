@@ -52,7 +52,9 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
 
     // Track image positions in VISUAL lines: (message_id, visual_start, height, is_sticker)
     let mut image_positions: Vec<(String, usize, usize, bool)> = Vec::new();
-    // Visual line count, computed for image positions and scroll
+    // Track visual line position of each message for scroll-to-cursor
+    let mut selected_visual_start: Option<usize> = None;
+    let mut selected_visual_end: Option<usize> = None;
     let mut visual_line_count: usize;
     let visual_height = |line: &Line| -> usize {
         let w = line.width();
@@ -61,6 +63,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
 
     for (msg_idx, msg) in active.messages.iter().enumerate() {
         let is_selected = is_focused && selected_idx == Some(msg_idx);
+        let msg_visual_start = lines.iter().map(&visual_height).sum::<usize>();
         let sel_style = if is_selected {
             Style::default().bg(theme::SELECTED_BG)
         } else {
@@ -276,21 +279,36 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
 
         // Blank line between messages
         lines.push(Line::from(""));
+
+        if is_selected {
+            selected_visual_start = Some(msg_visual_start);
+            selected_visual_end = Some(lines.iter().map(&visual_height).sum::<usize>());
+        }
     }
 
     // Final visual line count for scroll calculation
     visual_line_count = lines.iter().map(&visual_height).sum();
-
-    // Calculate scroll position from bottom offset.
-    // scroll_from_bottom=0 means show newest, higher = further back in history.
-    //
-    // Paragraph with Wrap scrolls in VISUAL (wrapped) lines, not logical lines.
-    // We must account for line wrapping to avoid clipping the bottom.
     let inner_height = inner.height as usize;
     let max_scroll = visual_line_count.saturating_sub(inner_height);
-    let scroll = max_scroll
-        .saturating_sub(active.scroll_from_bottom)
-        .min(max_scroll);
+
+    // Scroll to keep the selected message visible.
+    let scroll = if let (Some(sel_start), Some(sel_end)) = (selected_visual_start, selected_visual_end) {
+        let current = active.scroll_from_bottom;
+        let scroll_top = max_scroll.saturating_sub(current).min(max_scroll);
+        let scroll_bottom = scroll_top + inner_height;
+
+        if sel_start < scroll_top {
+            sel_start.min(max_scroll)
+        } else if sel_end > scroll_bottom {
+            sel_end.saturating_sub(inner_height).min(max_scroll)
+        } else {
+            scroll_top
+        }
+    } else {
+        max_scroll // no selection — show bottom
+    };
+    // Store back for next frame
+    let new_sfb = max_scroll.saturating_sub(scroll);
 
     let paragraph = Paragraph::new(lines)
         .block(block)
@@ -302,6 +320,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
     // Render images at their reserved positions (overlay on top of paragraph)
 
     if let Some(ref mut active) = app.active_chat {
+        active.scroll_from_bottom = new_sfb;
         for (msg_id, start_line, height, is_sticker) in &image_positions {
             // Calculate screen position: start_line - scroll = visible line offset
             let visible_y = (*start_line as isize) - (scroll as isize);
@@ -309,11 +328,13 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
                 continue; // Off-screen
             }
             let max_width = if *is_sticker { 20u16 } else { 50u16 };
+            // Use full reserved height — render_protocol clamps to frame bounds,
+            // so the image renders at natural size and clips at the viewport edge.
             let img_area = Rect {
-                x: inner.x + 4, // indent
+                x: inner.x + 4,
                 y: inner.y + visible_y as u16,
                 width: inner.width.saturating_sub(6).min(max_width),
-                height: (*height as u16).min(inner.height.saturating_sub(visible_y as u16)),
+                height: *height as u16,
             };
             if img_area.height == 0 || img_area.width == 0 {
                 continue;

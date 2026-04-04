@@ -864,7 +864,6 @@ impl App {
                 }
             }
             AppFocus::Messages => {
-                // j/Down = move cursor to next (newer) message
                 if let Some(ref mut active) = self.active_chat {
                     if active.messages.is_empty() {
                         return;
@@ -875,9 +874,8 @@ impl App {
                         None => last,
                     };
                     active.selected_msg_idx = Some(idx);
-                    // Each message ≈ 3 rendered lines. Convert to line-based offset.
-                    let msgs_from_bottom = last.saturating_sub(idx);
-                    active.scroll_from_bottom = msgs_from_bottom.saturating_mul(3);
+                    // scroll_from_bottom is computed by the render function
+                    // to keep the selected message visible.
                 }
             }
             _ => {}
@@ -890,7 +888,6 @@ impl App {
                 self.selected_chat_idx = self.selected_chat_idx.saturating_sub(1);
             }
             AppFocus::Messages => {
-                // k/Up = move cursor to previous (older) message
                 if let Some(ref mut active) = self.active_chat {
                     if active.messages.is_empty() {
                         return;
@@ -901,8 +898,6 @@ impl App {
                         None => last,
                     };
                     active.selected_msg_idx = Some(idx);
-                    let msgs_from_bottom = last.saturating_sub(idx);
-                    active.scroll_from_bottom = msgs_from_bottom.saturating_mul(3);
 
                     // Pagination: load older messages when cursor reaches the top
                     if idx == 0 && !active.messages.is_empty() {
@@ -917,14 +912,7 @@ impl App {
                                 if let Some(ref mut active) = self.active_chat {
                                     combined.append(&mut active.messages);
                                     active.messages = combined;
-                                    // Adjust cursor to stay on the same message
                                     active.selected_msg_idx = Some(new_count);
-                                    active.scroll_from_bottom = active
-                                        .messages
-                                        .len()
-                                        .saturating_sub(1)
-                                        .saturating_sub(new_count)
-                                        .saturating_mul(3);
                                 }
                             }
                         }
@@ -941,8 +929,6 @@ impl App {
             AppFocus::Messages => {
                 if let Some(ref mut active) = self.active_chat {
                     active.selected_msg_idx = Some(0);
-                    let last = active.messages.len().saturating_sub(1);
-                    active.scroll_from_bottom = last.saturating_mul(3);
                 }
             }
             _ => {}
@@ -970,27 +956,19 @@ impl App {
 
     fn scroll_half_page_down(&mut self) {
         if let Some(ref mut active) = self.active_chat {
-            let jump = 5usize; // 5 messages
-            if let Some(ref mut idx) = active.selected_msg_idx {
-                let last = active.messages.len().saturating_sub(1);
-                *idx = (*idx + jump).min(last);
-                active.scroll_from_bottom = last.saturating_sub(*idx).saturating_mul(3);
-            } else {
-                active.scroll_from_bottom = active.scroll_from_bottom.saturating_sub(jump * 3);
-            }
+            let jump = 5usize;
+            let last = active.messages.len().saturating_sub(1);
+            let idx = active.selected_msg_idx.unwrap_or(last);
+            active.selected_msg_idx = Some((idx + jump).min(last));
         }
     }
 
     fn scroll_half_page_up(&mut self) {
         if let Some(ref mut active) = self.active_chat {
             let jump = 5usize;
-            if let Some(ref mut idx) = active.selected_msg_idx {
-                *idx = idx.saturating_sub(jump);
-                let last = active.messages.len().saturating_sub(1);
-                active.scroll_from_bottom = last.saturating_sub(*idx).saturating_mul(3);
-            } else {
-                active.scroll_from_bottom = active.scroll_from_bottom.saturating_add(jump * 3);
-            }
+            let last = active.messages.len().saturating_sub(1);
+            let idx = active.selected_msg_idx.unwrap_or(last);
+            active.selected_msg_idx = Some(idx.saturating_sub(jump));
         }
     }
 

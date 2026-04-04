@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.4] - 2026-04-04
+
+### Fixed
+
+- Images shrinking when partially scrolling out of viewport — now renders at natural size with frame clipping
+- Cursor disappearing when scrolling to older messages — scroll now computed from actual visual line positions instead of broken `message_count * 3` estimate
+
 ## [0.1.3] - 2026-04-04
 
 ### Fixed
@@ -71,6 +78,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Desktop notifications
 - SQLite storage with FTS5 search
 
+[0.1.4]: https://github.com/TopengDev/whatsapp-tui/releases/tag/v0.1.4
 [0.1.3]: https://github.com/TopengDev/whatsapp-tui/releases/tag/v0.1.3
 [0.1.2]: https://github.com/TopengDev/whatsapp-tui/releases/tag/v0.1.2
 [0.1.1]: https://github.com/TopengDev/whatsapp-tui/releases/tag/v0.1.1
