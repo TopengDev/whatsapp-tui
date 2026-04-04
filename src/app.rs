@@ -174,22 +174,19 @@ impl App {
         // (e.g., leftover bytes from tmux send-keys launch).
         while term_rx.try_recv().is_ok() {}
 
-        // Main loop — connect happens after first render so the UI is visible immediately
+        // Connect before entering the main loop — ensures we're connected
+        // (or at least attempting) before showing the chat UI.
+        self.connection_status = ConnectionStatus::Reconnecting { attempt: 0, max: 0 };
+        terminal.draw(|frame| ui::render(frame, self))?;
+        if let Err(e) = self.wa.connect().await {
+            tracing::error!("failed to connect: {}", e);
+            self.connection_status = ConnectionStatus::Disconnected;
+        }
+
         let mut tick = interval(Duration::from_millis(250));
-        let mut connected = false;
 
         loop {
-            // Render first — UI is always responsive
             terminal.draw(|frame| ui::render(frame, self))?;
-
-            // Initiate WA connection after first render
-            if !connected {
-                connected = true;
-                if let Err(e) = self.wa.connect().await {
-                    tracing::error!("failed to connect: {}", e);
-                    self.connection_status = ConnectionStatus::Disconnected;
-                }
-            }
 
             // Biased select: terminal events always win over WA events.
             // This keeps the UI responsive during history sync floods.
@@ -235,6 +232,8 @@ impl App {
     }
 
     fn load_chats(&mut self) -> Result<()> {
+        // Merge any LID duplicate chats before loading
+        let _ = self.store.merge_lid_duplicates();
         self.chats = self.store.get_chats_ordered()?;
         Ok(())
     }
@@ -583,10 +582,23 @@ impl App {
                 let _ = self.load_chats();
             }
             WaEvent::MessageReceived(mut msg) => {
-                // Resolve LID JID → phone JID (no-ops for non-LID JIDs)
-                let resolved = self.store.resolve_lid_to_phone(&msg.chat_jid);
-                if resolved != msg.chat_jid {
-                    msg.chat_jid = resolved;
+                // Resolve LID chat JID → phone JID
+                if msg.chat_jid.contains("@lid") && !msg.chat_jid.contains("@g.us") {
+                    let resolved = self.store.resolve_lid_to_phone(&msg.chat_jid);
+                    if resolved != msg.chat_jid {
+                        msg.chat_jid = resolved;
+                    } else if !msg.from_me {
+                        // DM from counterparty via LID — no mapping exists yet.
+                        // Try to find the phone-JID chat by matching push name
+                        // to an existing contact, then save the mapping.
+                        if let Some(ref pn) = msg.sender_push_name {
+                            if let Ok(phone) = self.store.find_phone_jid_by_push_name(pn) {
+                                let _ = self.store.set_chat_lid(&phone, &msg.chat_jid);
+                                let _ = self.store.migrate_lid_messages(&msg.chat_jid, &phone);
+                                msg.chat_jid = phone;
+                            }
+                        }
+                    }
                 }
 
                 // Update contact push name if present

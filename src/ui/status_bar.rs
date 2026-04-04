@@ -48,7 +48,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         Span::raw(" "),
         Span::styled(conn_label, Style::default().fg(conn_color)),
         Span::raw("  "),
-        Span::styled("whatsapp-tui v0.1.0", theme::muted_style()),
+        Span::styled("whatsapp-tui v0.1.3", theme::muted_style()),
     ]);
 
     let bar = Paragraph::new(line);
@@ -73,11 +73,11 @@ fn render_reconnecting(
         ),
         Span::raw(" "),
         Span::styled(
-            format!("Reconnecting ({}/{})", attempt, max),
+            if attempt == 0 { "Connecting...".to_string() } else { format!("Reconnecting ({}/{})", attempt, max) },
             Style::default().fg(theme::STATUS_RECONNECTING),
         ),
         Span::raw("  "),
-        Span::styled("whatsapp-tui v0.1.0", theme::muted_style()),
+        Span::styled("whatsapp-tui v0.1.3", theme::muted_style()),
     ]);
     let bar = Paragraph::new(line);
     frame.render_widget(bar, area);

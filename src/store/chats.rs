@@ -79,7 +79,11 @@ pub fn get_ordered(conn: &Connection) -> Result<Vec<Chat>> {
         "SELECT jid, name, is_group, last_message_ts, last_message_preview, \
          unread_count, muted, pinned, archived, lid_jid \
          FROM chats \
-         WHERE jid NOT LIKE '%@lid' AND archived = 0 \
+         WHERE archived = 0 \
+           AND jid != 'status@broadcast' \
+           AND NOT (jid LIKE '%@lid' AND EXISTS ( \
+               SELECT 1 FROM chats c2 WHERE c2.lid_jid = chats.jid AND c2.jid NOT LIKE '%@lid' \
+           )) \
          ORDER BY pinned DESC, last_message_ts DESC NULLS LAST",
     )?;
     let rows = stmt

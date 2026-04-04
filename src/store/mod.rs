@@ -63,6 +63,54 @@ impl Store {
         Ok(())
     }
 
+    /// Merge LID DM chats into their phone-JID counterparts.
+    /// Detects duplicates by matching contacts with the same name
+    /// across LID and phone JID chats.
+    pub fn merge_lid_duplicates(&self) -> Result<usize> {
+        // Find LID DM chats that have a phone-JID chat with the same contact name
+        let merged = self.conn.execute(
+            "UPDATE messages SET chat_jid = ( \
+                SELECT c2.jid FROM chats c2 \
+                JOIN contacts ct ON ct.jid = c2.jid \
+                WHERE c2.jid LIKE '%@s.whatsapp.net' AND c2.is_group = 0 \
+                AND ct.name = (SELECT ct2.name FROM contacts ct2 WHERE ct2.jid = messages.chat_jid) \
+                LIMIT 1 \
+            ) \
+            WHERE chat_jid LIKE '%@lid' \
+            AND chat_jid NOT LIKE '%@g.us' \
+            AND chat_jid != 'status@broadcast' \
+            AND EXISTS ( \
+                SELECT 1 FROM chats c2 \
+                JOIN contacts ct ON ct.jid = c2.jid \
+                WHERE c2.jid LIKE '%@s.whatsapp.net' AND c2.is_group = 0 \
+                AND ct.name = (SELECT ct2.name FROM contacts ct2 WHERE ct2.jid = messages.chat_jid) \
+            )",
+            [],
+        )?;
+        if merged > 0 {
+            // Set lid_jid on the phone chats for future resolution
+            let _ = self.conn.execute(
+                "UPDATE chats SET lid_jid = ( \
+                    SELECT lid.jid FROM chats lid \
+                    JOIN contacts ct1 ON ct1.jid = lid.jid \
+                    JOIN contacts ct2 ON ct2.jid = chats.jid \
+                    WHERE lid.jid LIKE '%@lid' AND ct1.name = ct2.name \
+                    LIMIT 1 \
+                ) \
+                WHERE jid LIKE '%@s.whatsapp.net' AND is_group = 0 AND lid_jid IS NULL \
+                AND EXISTS ( \
+                    SELECT 1 FROM chats lid \
+                    JOIN contacts ct1 ON ct1.jid = lid.jid \
+                    JOIN contacts ct2 ON ct2.jid = chats.jid \
+                    WHERE lid.jid LIKE '%@lid' AND ct1.name = ct2.name \
+                )",
+                [],
+            );
+            tracing::info!("merged {} LID duplicate messages", merged);
+        }
+        Ok(merged)
+    }
+
     /// Bulk-insert a chat and its messages inside a single transaction.
     /// Much faster than individual inserts during history sync.
     pub fn bulk_sync_chat(&self, chat: &Chat, messages: &[Message]) -> Result<()> {
@@ -208,6 +256,19 @@ impl Store {
         jid.to_string()
     }
 
+    /// Find a phone-JID chat whose contact name or chat name matches a push name.
+    /// Used to resolve LID DM chats to their phone-JID counterpart.
+    pub fn find_phone_jid_by_push_name(&self, push_name: &str) -> Result<String> {
+        // Match against chats with non-numeric names (already resolved)
+        self.conn.query_row(
+            "SELECT jid FROM chats \
+             WHERE jid LIKE '%@s.whatsapp.net' AND is_group = 0 \
+             AND name = ?1 LIMIT 1",
+            params![push_name],
+            |row| row.get::<_, String>(0),
+        ).map_err(|e| anyhow::anyhow!("no match: {}", e))
+    }
+
     pub fn set_muted(&self, jid: &str, muted: bool) -> Result<()> {
         chats::set_muted(&self.conn, jid, muted)
     }
@@ -260,6 +321,25 @@ impl Store {
         for row in rows3 {
             if let Ok((lid, name)) = row {
                 map.entry(lid).or_insert(name);
+            }
+        }
+        // Map LID JIDs → saved contact names via chats.lid_jid → contacts.
+        // This ensures saved address book names ("bang tama hck 57") override
+        // server-provided names ("Tama") for LID senders.
+        let mut stmt4 = self.conn.prepare(
+            "SELECT ch.lid_jid, COALESCE(ct.name, ct.push_name) \
+             FROM chats ch \
+             JOIN contacts ct ON ct.jid = ch.jid \
+             WHERE ch.lid_jid IS NOT NULL \
+             AND COALESCE(ct.name, ct.push_name) IS NOT NULL \
+             AND COALESCE(ct.name, ct.push_name) != ''",
+        )?;
+        let rows4 = stmt4.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows4 {
+            if let Ok((lid, name)) = row {
+                map.insert(lid, name); // override LID contact's name with saved name
             }
         }
         Ok(map)

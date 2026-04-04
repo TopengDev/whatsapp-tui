@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.3] - 2026-04-04
+
+### Fixed
+
+- Missing counterparty messages stored under LID chat JIDs instead of phone JIDs
+- Automatic LID→phone chat merging via contact name matching on startup
+- Real-time LID DM resolution using sender push name to find phone-JID chat
+- `status@broadcast` ("gass bintaro") appearing in chat list
+- Sender name priority: saved contact names now override WA push names
+- Sender colors inconsistent between LID and phone JIDs (now hashed from display name)
+- Version display stuck at v0.1.0
+
+### Changed
+
+- LID-only chats now visible in chat list (previously all `@lid` chats were hidden)
+- Connection established before rendering UI — shows "Connecting..." status on launch
+
 ## [0.1.2] - 2026-04-04
 
 ### Fixed
@@ -54,6 +71,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Desktop notifications
 - SQLite storage with FTS5 search
 
+[0.1.3]: https://github.com/TopengDev/whatsapp-tui/releases/tag/v0.1.3
 [0.1.2]: https://github.com/TopengDev/whatsapp-tui/releases/tag/v0.1.2
 [0.1.1]: https://github.com/TopengDev/whatsapp-tui/releases/tag/v0.1.1
 [0.1.0]: https://github.com/TopengDev/whatsapp-tui/releases/tag/v0.1.0

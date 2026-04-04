@@ -78,11 +78,9 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
         let sender_name = if msg.from_me {
             "You".to_string()
         } else {
-            // Priority: push_name from DB > contacts/chats lookup > phone number > "Member"
-            msg.sender_push_name
-                .as_deref()
-                .map(|s| s.to_string())
-                .or_else(|| active.sender_names.get(&msg.sender_jid).cloned())
+            // Priority: saved contact name > push_name from DB > phone number > "~LID"
+            active.sender_names.get(&msg.sender_jid).cloned()
+                .or_else(|| msg.sender_push_name.as_deref().map(|s| s.to_string()))
                 .unwrap_or_else(|| {
                     let raw = msg.sender_jid.split('@').next().unwrap_or("?");
                     if msg.sender_jid.contains("@lid") {
@@ -99,7 +97,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
         let sender_color = if msg.from_me {
             theme::OWN_MESSAGE
         } else {
-            sender_color_hash(&msg.sender_jid)
+            sender_color_hash(&sender_name)
         };
 
         let mut header_spans = vec![
