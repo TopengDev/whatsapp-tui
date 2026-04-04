@@ -185,7 +185,7 @@ pub fn map_wa_event(event: Event) -> Option<WaEvent> {
         }
 
         Event::ContactUpdate(update) => {
-            // Main source of contact names during sync.
+            // Main source of contact names and LID→phone mappings during sync.
             // ContactAction has full_name, first_name, lid_jid, pn_jid.
             let action = &update.action;
             let name = action
@@ -206,17 +206,20 @@ pub fn map_wa_event(event: Event) -> Option<WaEvent> {
                 None
             };
 
-            if let Some(ref contact_name) = name {
-                if !contact_name.is_empty() {
-                    return Some(WaEvent::ContactUpdate(Contact {
-                        jid: phone_jid,
-                        name: Some(contact_name.clone()),
-                        push_name: None,
-                        phone: None,
-                        profile_pic_url: None,
-                        lid_jid,
-                    }));
-                }
+            // Always emit if we have a name OR a LID→phone mapping.
+            // The mapping is valuable even without a name — it lets us
+            // resolve LID sender JIDs in group messages.
+            let has_name = name.as_ref().map_or(false, |n| !n.is_empty());
+            let has_mapping = lid_jid.is_some();
+            if has_name || has_mapping {
+                return Some(WaEvent::ContactUpdate(Contact {
+                    jid: phone_jid,
+                    name: if has_name { name } else { None },
+                    push_name: None,
+                    phone: None,
+                    profile_pic_url: None,
+                    lid_jid,
+                }));
             }
             None
         }
@@ -250,6 +253,51 @@ pub fn map_wa_event(event: Event) -> Option<WaEvent> {
             }))
         }
 
+        Event::GroupUpdate(update) => {
+            let group_jid = update.group_jid.to_string();
+            match &update.action {
+                wacore::stanza::groups::GroupNotificationAction::Subject {
+                    subject, ..
+                } => Some(WaEvent::ChatUpdate(Chat {
+                    jid: group_jid,
+                    name: subject.clone(),
+                    is_group: true,
+                    last_message_ts: None,
+                    last_message_preview: None,
+                    unread_count: 0,
+                    muted: false,
+                    pinned: false,
+                    archived: false,
+                    lid_jid: None,
+                })),
+                wacore::stanza::groups::GroupNotificationAction::Add { .. }
+                | wacore::stanza::groups::GroupNotificationAction::Remove { .. }
+                | wacore::stanza::groups::GroupNotificationAction::Promote { .. }
+                | wacore::stanza::groups::GroupNotificationAction::Demote { .. } => {
+                    Some(WaEvent::GroupMembersUpdate {
+                        group_jid,
+                        members: Vec::new(), // empty = signal to re-fetch
+                    })
+                }
+                _ => None,
+            }
+        }
+
+        Event::Receipt(receipt) => {
+            use wacore::types::presence::ReceiptType;
+            let status = match receipt.r#type {
+                ReceiptType::Read | ReceiptType::ReadSelf => MessageStatus::Read,
+                ReceiptType::Played | ReceiptType::PlayedSelf => MessageStatus::Read,
+                ReceiptType::Delivered => MessageStatus::Delivered,
+                _ => return None,
+            };
+            let message_id = receipt.message_ids.first()?.to_string();
+            Some(WaEvent::Receipt {
+                message_id,
+                status,
+            })
+        }
+
         // Events we don't map yet
         _ => None,
     }
@@ -260,13 +308,14 @@ fn convert_realtime_message(
     wa_msg: &wa::Message,
     info: &wacore::types::message::MessageInfo,
 ) -> Message {
+    let base_msg = wa_msg.get_base_message();
     let content = wa_msg.text_content().map(|s| s.to_string());
     let msg_type = detect_message_type(wa_msg);
 
-    let (media_mime, media_size, media_filename) = extract_media_info(wa_msg);
-    let (reply_to_id, reply_to_preview) = extract_reply_context(wa_msg);
-    let (dl_path, dl_key, dl_sha, dl_enc_sha) = extract_download_params(wa_msg);
-    let meta = extract_media_meta(wa_msg);
+    let (media_mime, media_size, media_filename) = extract_media_info(base_msg);
+    let (reply_to_id, reply_to_preview) = extract_reply_context(base_msg);
+    let (dl_path, dl_key, dl_sha, dl_enc_sha) = extract_download_params(base_msg);
+    let meta = extract_media_meta(base_msg);
 
     Message {
         id: info.id.clone(),
@@ -309,6 +358,7 @@ fn convert_realtime_message(
         link_url: meta.link_url,
         caption: meta.caption,
         is_gif: meta.is_gif,
+        media_dimensions: meta.dimensions,
     }
 }
 
@@ -414,12 +464,14 @@ fn convert_conversation(conv: &wa::Conversation) -> Option<SyncedChat> {
         }
     });
 
-    // Prefer the actual last message timestamp for accurate ordering,
-    // falling back to conversation metadata when no messages were decoded.
-    let last_ts = messages
-        .last()
-        .map(|m| m.timestamp)
-        .or(metadata_ts);
+    // Use the newer of decoded-message timestamp and conversation metadata.
+    // History sync only delivers a subset of messages, so the decoded last
+    // message can be older than the real latest activity.
+    let decoded_ts = messages.last().map(|m| m.timestamp);
+    let last_ts = match (decoded_ts, metadata_ts) {
+        (Some(d), Some(m)) => Some(d.max(m)),
+        (d, m) => d.or(m),
+    };
 
     let chat = Chat {
         jid: chat_jid,
@@ -472,30 +524,47 @@ fn convert_history_message(wmi: &wa::WebMessageInfo, chat_jid: &str) -> Option<M
     let sender_jid = if from_me {
         "me".to_string()
     } else {
-        // For group messages, the actual sender is in wmi.participant (top-level),
-        // NOT key.participant (which is for reply quoting context).
-        wmi.participant
-            .clone()
-            .or_else(|| key.participant.clone())
-            .or_else(|| key.remote_jid.clone())
+        // For group messages, try multiple sources for the sender JID.
+        // Prefer phone JIDs (@s.whatsapp.net) over LID JIDs (@lid)
+        // since phone JIDs can be resolved to contact names.
+        let candidates = [
+            wmi.participant.as_deref(),
+            key.participant.as_deref(),
+            key.remote_jid.as_deref(),
+        ];
+        // First pass: find a phone JID
+        candidates
+            .iter()
+            .filter_map(|c| *c)
+            .find(|jid| jid.contains("@s.whatsapp.net") || jid.contains("@c.us"))
+            .map(|s| s.to_string())
+            // Second pass: take whatever is available
+            .or_else(|| {
+                candidates
+                    .iter()
+                    .filter_map(|c| *c)
+                    .next()
+                    .map(|s| s.to_string())
+            })
             .unwrap_or_else(|| chat_jid.to_string())
     };
 
     let timestamp = wmi.message_timestamp.unwrap_or(0) as i64;
+    let base_msg = wa_msg.get_base_message();
     let content = wa_msg.text_content().map(|s| s.to_string());
     let msg_type = detect_message_type(wa_msg);
-    let (media_mime, media_size, media_filename) = extract_media_info(wa_msg);
-    let (reply_to_id, reply_to_preview) = extract_reply_context(wa_msg);
-    let (dl_path, dl_key, dl_sha, dl_enc_sha) = extract_download_params(wa_msg);
-    let meta = extract_media_meta(wa_msg);
+    let (media_mime, media_size, media_filename) = extract_media_info(base_msg);
+    let (reply_to_id, reply_to_preview) = extract_reply_context(base_msg);
+    let (dl_path, dl_key, dl_sha, dl_enc_sha) = extract_download_params(base_msg);
+    let meta = extract_media_meta(base_msg);
 
-    let status_int = wmi.status.unwrap_or(0);
+    let status_int = wmi.status.unwrap_or(1);
     let status = match status_int {
-        0 => MessageStatus::Pending,
-        1 => MessageStatus::Sent,
-        2 => MessageStatus::Delivered,
-        3 | 4 => MessageStatus::Read,
-        5 => MessageStatus::Failed,
+        0 => MessageStatus::Failed,    // ERROR
+        1 => MessageStatus::Pending,   // PENDING
+        2 => MessageStatus::Sent,      // SERVER_ACK
+        3 => MessageStatus::Delivered, // DELIVERY_ACK
+        4 | 5 => MessageStatus::Read,  // READ / PLAYED
         _ => MessageStatus::Sent,
     };
 
@@ -529,6 +598,7 @@ fn convert_history_message(wmi: &wa::WebMessageInfo, chat_jid: &str) -> Option<M
         link_url: meta.link_url,
         caption: meta.caption,
         is_gif: meta.is_gif,
+        media_dimensions: meta.dimensions,
     })
 }
 
@@ -624,6 +694,7 @@ pub struct MediaMeta {
     pub link_title: Option<String>,
     pub link_description: Option<String>,
     pub link_url: Option<String>,
+    pub dimensions: Option<(u32, u32)>,
 }
 
 fn extract_media_meta(msg: &wa::Message) -> MediaMeta {
@@ -635,6 +706,7 @@ fn extract_media_meta(msg: &wa::Message) -> MediaMeta {
         link_title: None,
         link_description: None,
         link_url: None,
+        dimensions: None,
     };
 
     if let Some(ref vid) = msg.video_message {
@@ -648,6 +720,9 @@ fn extract_media_meta(msg: &wa::Message) -> MediaMeta {
     }
     if let Some(ref img) = msg.image_message {
         meta.caption = img.caption.clone();
+        if let (Some(w), Some(h)) = (img.width, img.height) {
+            meta.dimensions = Some((w, h));
+        }
     }
     if let Some(ref ext) = msg.extended_text_message {
         meta.link_title = ext.title.clone();

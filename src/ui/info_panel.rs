@@ -53,7 +53,15 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         lines.push(Line::from(""));
 
         for member in &active.members {
-            let name = member.jid.split('@').next().unwrap_or("?");
+            let name = active
+                .sender_names
+                .get(&member.jid)
+                .map(|s| s.as_str())
+                .unwrap_or_else(|| {
+                    let raw = member.jid.split('@').next().unwrap_or("?");
+                    // Show phone numbers but hide meaningless LID numbers
+                    if member.jid.contains("@lid") { "Member" } else { raw }
+                });
             let suffix = if member.is_super_admin {
                 " [owner]"
             } else if member.is_admin {

@@ -82,8 +82,8 @@ pub struct ActiveChat {
     pub typing_jids: HashSet<String>,
     /// JID → display name lookup for message senders.
     pub sender_names: HashMap<String, String>,
-    /// Message ID → protocol state for inline image rendering.
-    pub media_cache: HashMap<String, StatefulProtocol>,
+    /// Message ID → (protocol state, width, height) for inline image rendering.
+    pub media_cache: HashMap<String, (StatefulProtocol, u32, u32)>,
 }
 
 // --- App ---
@@ -114,6 +114,7 @@ pub struct App {
 
     // Key state
     key_buffer: KeyBuffer,
+    reconnect_attempt: u32,
 }
 
 impl App {
@@ -143,6 +144,7 @@ impl App {
             event_tx,
             picker,
             key_buffer: KeyBuffer::new(),
+            reconnect_attempt: 0,
         }
     }
 
@@ -242,13 +244,22 @@ impl App {
             AppEvent::Terminal(_) => {}
             AppEvent::Wa(ev) => self.handle_wa(ev).await,
             AppEvent::MediaData { message_id, data } => {
-                if let Some(proto) = crate::ui::image::create_protocol(&self.picker, &data) {
+                if let Some((proto, w, h)) = crate::ui::image::create_protocol(&self.picker, &data) {
                     if let Some(ref mut active) = self.active_chat {
-                        active.media_cache.insert(message_id, proto);
+                        active.media_cache.insert(message_id, (proto, w, h));
                     }
                 }
             }
             AppEvent::Task(result) => self.handle_task_result(result),
+            AppEvent::Reconnect => {
+                if matches!(self.connection_status, ConnectionStatus::LoggedOut) {
+                    return;
+                }
+                if let Err(e) = self.wa.connect().await {
+                    tracing::error!("reconnect failed: {}", e);
+                    self.connection_status = ConnectionStatus::Disconnected;
+                }
+            }
         }
     }
 
@@ -418,38 +429,61 @@ impl App {
     async fn handle_wa(&mut self, event: WaEvent) {
         match event {
             WaEvent::Connected => {
+                let was_reconnect = self.reconnect_attempt > 0;
                 self.connection_status = ConnectionStatus::Connected;
+                self.reconnect_attempt = 0;
                 // Dismiss QR overlay if still showing
                 if matches!(self.overlay, Some(Overlay::QrCode { .. })) {
                     self.overlay = None;
                 }
-                tracing::info!("connected to WhatsApp");
+                if was_reconnect {
+                    tracing::info!("reconnected — refreshing state");
+                    let _ = self.load_chats();
+                    if let Some(ref mut active) = self.active_chat {
+                        if let Ok(msgs) = self.store.get_messages(&active.jid, None, 200) {
+                            active.messages = msgs;
+                        }
+                    }
+                } else {
+                    tracing::info!("connected to WhatsApp");
+                }
+                // Resolve unnamed group subjects in the background
+                self.resolve_unnamed_groups().await;
             }
             WaEvent::Disconnected { reason } => {
                 self.connection_status = ConnectionStatus::Disconnected;
                 tracing::warn!("disconnected: {}", reason);
             }
             WaEvent::BotStopped => {
-                // Bot's run loop ended (server 515 kick, network drop, etc.)
-                // Don't reconnect if we were logged out — need fresh QR scan.
                 if matches!(self.connection_status, ConnectionStatus::LoggedOut) {
                     tracing::info!("bot stopped after logout, not reconnecting");
                     return;
                 }
-                tracing::info!("bot stopped, reconnecting in 2s...");
-                self.connection_status = ConnectionStatus::Reconnecting {
-                    attempt: 1,
-                    max: self.config.connection.reconnect_max_retries,
-                };
-                tokio::time::sleep(Duration::from_secs(2)).await;
-                // Re-check after sleep — LoggedOut may have arrived in the meantime
-                if matches!(self.connection_status, ConnectionStatus::LoggedOut) {
+                self.reconnect_attempt += 1;
+                let max = self.config.connection.reconnect_max_retries;
+                if self.reconnect_attempt > max {
+                    tracing::error!("max reconnect attempts ({}) exceeded", max);
+                    self.connection_status = ConnectionStatus::Disconnected;
                     return;
                 }
-                if let Err(e) = self.wa.connect().await {
-                    tracing::error!("reconnect failed: {}", e);
-                    self.connection_status = ConnectionStatus::Disconnected;
-                }
+                let base = self.config.connection.reconnect_base_delay_ms;
+                let delay = base * 2u64.pow(self.reconnect_attempt.min(5) - 1);
+                tracing::info!(
+                    "bot stopped, reconnecting in {}ms (attempt {}/{})",
+                    delay,
+                    self.reconnect_attempt,
+                    max
+                );
+                self.connection_status = ConnectionStatus::Reconnecting {
+                    attempt: self.reconnect_attempt,
+                    max,
+                };
+                // Non-blocking: spawn delayed reconnect event
+                let tx = self.event_tx.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_millis(delay)).await;
+                    let _ = tx.send(AppEvent::Reconnect);
+                });
             }
             WaEvent::LoggedOut => {
                 tracing::info!("logged out — session invalidated, need new QR scan");
@@ -474,26 +508,49 @@ impl App {
                 tracing::info!("auth successful");
             }
             WaEvent::HistorySync { chats, push_names } => {
-                // Apply push names → update chat names for DM chats
+                // Apply push names → update contacts and chat names
                 for (jid, name) in &push_names {
+                    // Normalize JID to full format for consistent lookup
+                    let full_jid = if jid.contains('@') {
+                        jid.clone()
+                    } else {
+                        format!("{}@s.whatsapp.net", jid)
+                    };
                     let _ = self.store.upsert_contact(&crate::store::contacts::Contact {
-                        jid: jid.clone(),
+                        jid: full_jid.clone(),
                         name: None,
                         push_name: Some(name.clone()),
                         phone: None,
                         profile_pic_url: None,
                         lid_jid: None,
                     });
-                    // Update chat name: use JID@s.whatsapp.net format
-                    let dm_jid = if jid.contains('@') {
-                        jid.clone()
-                    } else {
-                        format!("{}@s.whatsapp.net", jid)
-                    };
-                    let _ = self.store.set_chat_name(&dm_jid, name);
+                    let _ = self.store.set_chat_name(&full_jid, name);
                 }
 
                 for synced in chats {
+                    // Harvest push names from messages → contacts table
+                    for msg in &synced.messages {
+                        if let Some(ref pn) = msg.sender_push_name {
+                            if !pn.is_empty() && msg.sender_jid != "me" {
+                                let sender = if msg.sender_jid.contains('@') {
+                                    msg.sender_jid.clone()
+                                } else {
+                                    format!("{}@s.whatsapp.net", msg.sender_jid)
+                                };
+                                let _ = self.store.upsert_contact(
+                                    &crate::store::contacts::Contact {
+                                        jid: sender,
+                                        name: None,
+                                        push_name: Some(pn.clone()),
+                                        phone: None,
+                                        profile_pic_url: None,
+                                        lid_jid: None,
+                                    },
+                                );
+                            }
+                        }
+                    }
+
                     // Bulk insert chat + messages in a single transaction (fast)
                     if let Err(e) = self.store.bulk_sync_chat(&synced.chat, &synced.messages) {
                         tracing::error!("failed to sync chat {}: {}", synced.chat.jid, e);
@@ -650,7 +707,10 @@ impl App {
                     .unwrap_or("");
                 if !name.is_empty() {
                     let _ = self.store.set_chat_name(&contact.jid, name);
-                    let _ = self.store.set_chat_name_by_lid(&contact.jid, name);
+                    // If this contact has a LID, also update chats keyed by that LID
+                    if let Some(ref lid) = contact.lid_jid {
+                        let _ = self.store.set_chat_name_by_lid(lid, name);
+                    }
                 }
 
                 // If this contact has a LID→phone mapping, migrate orphaned
@@ -680,6 +740,38 @@ impl App {
                     }
                 }
             }
+            WaEvent::GroupMembersUpdate {
+                group_jid,
+                members,
+            } => {
+                if members.is_empty() {
+                    // Empty members = signal to re-fetch from server
+                    if let Some(ref mut active) = self.active_chat {
+                        if active.jid == group_jid {
+                            match self.wa.get_group_info(&group_jid).await {
+                                Ok((_subject, fetched)) => {
+                                    let _ =
+                                        self.store.set_group_members(&group_jid, &fetched);
+                                    active.members = fetched;
+                                }
+                                Err(e) => {
+                                    tracing::debug!(
+                                        "re-fetch group members failed: {}",
+                                        e
+                                    );
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    let _ = self.store.set_group_members(&group_jid, &members);
+                    if let Some(ref mut active) = self.active_chat {
+                        if active.jid == group_jid {
+                            active.members = members;
+                        }
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -706,6 +798,48 @@ impl App {
 
     fn handle_tick(&mut self) {
         // Periodic tasks: clear stale typing indicators, etc.
+    }
+
+    /// Fetch subjects from the server for groups whose name looks like a JID number.
+    async fn resolve_unnamed_groups(&mut self) {
+        let unnamed: Vec<String> = self
+            .chats
+            .iter()
+            .filter(|c| {
+                c.is_group
+                    && c.name
+                        .chars()
+                        .all(|ch| ch.is_ascii_digit() || ch == '+' || ch == '-')
+            })
+            .map(|c| c.jid.clone())
+            .collect();
+
+        if unnamed.is_empty() {
+            return;
+        }
+        tracing::info!("resolving {} unnamed groups", unnamed.len());
+        let mut resolved = 0usize;
+        for jid in &unnamed {
+            match self.wa.get_group_info(jid).await {
+                Ok((Some(subject), members)) => {
+                    if !subject.is_empty() {
+                        let _ = self.store.set_chat_name(jid, &subject);
+                        resolved += 1;
+                    }
+                    if !members.is_empty() {
+                        let _ = self.store.set_group_members(jid, &members);
+                    }
+                }
+                Ok((None, _)) => {}
+                Err(e) => {
+                    tracing::debug!("group info fetch failed for {}: {}", jid, e);
+                }
+            }
+        }
+        if resolved > 0 {
+            tracing::info!("resolved {} group names", resolved);
+            let _ = self.load_chats();
+        }
     }
 
     // --- Navigation ---
@@ -865,26 +999,40 @@ impl App {
             Vec::new()
         };
 
-        // Fetch group members from server if not in DB
-        if chat.is_group && members.is_empty() {
-            match self.wa.get_group_members(&chat.jid).await {
-                Ok(fetched) => {
-                    let _ = self.store.set_group_members(&chat.jid, &fetched);
-                    members = fetched;
+        // Fetch group members and subject from server if needed
+        let needs_member_fetch = members.is_empty()
+            || members.iter().any(|m| m.jid.contains("@lid"));
+        let name_is_numeric = chat.name.chars().all(|c| c.is_ascii_digit() || c == '+' || c == '-');
+        let mut fetched_name: Option<String> = None;
+        if chat.is_group && (needs_member_fetch || name_is_numeric) {
+            match self.wa.get_group_info(&chat.jid).await {
+                Ok((subject, fetched_members)) => {
+                    if let Some(ref name) = subject {
+                        if !name.is_empty() {
+                            let _ = self.store.set_chat_name(&chat.jid, name);
+                            fetched_name = Some(name.clone());
+                        }
+                    }
+                    if !fetched_members.is_empty() {
+                        let _ = self.store.set_group_members(&chat.jid, &fetched_members);
+                        members = fetched_members;
+                    }
                 }
                 Err(e) => {
-                    tracing::debug!("failed to fetch group members for {}: {}", chat.jid, e);
+                    tracing::debug!("failed to fetch group info for {}: {}", chat.jid, e);
                 }
             }
         }
 
-        // Auto-download stickers only (they're small ~50KB).
-        // Images/docs/video stay manual via 'd' key.
+        // Auto-download stickers and images in background.
         let to_download: Vec<crate::store::messages::Message> = messages
             .iter()
             .filter(|m| {
-                matches!(m.message_type, crate::store::messages::MessageType::Sticker)
-                    && m.media_direct_path.is_some()
+                matches!(
+                    m.message_type,
+                    crate::store::messages::MessageType::Sticker
+                        | crate::store::messages::MessageType::Image
+                ) && m.media_direct_path.is_some()
             })
             .cloned()
             .collect();
@@ -895,9 +1043,42 @@ impl App {
             Some(messages.len() - 1)
         };
 
+        let mut sender_names = self.store.get_display_names().unwrap_or_default();
+
+        // Harvest push names from message history — covers senders not in contacts
+        for msg in &messages {
+            if let Some(ref pn) = msg.sender_push_name {
+                if !pn.is_empty() && !sender_names.contains_key(&msg.sender_jid) {
+                    sender_names.insert(msg.sender_jid.clone(), pn.clone());
+                }
+            }
+        }
+
+        // Resolve LID JIDs → phone JIDs for name lookup.
+        // Covers both group member JIDs and message sender JIDs.
+        let lid_jids: Vec<String> = members
+            .iter()
+            .map(|m| m.jid.clone())
+            .chain(messages.iter().map(|m| m.sender_jid.clone()))
+            .filter(|jid| jid.contains("@lid") && !sender_names.contains_key(jid))
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+
+        for lid in &lid_jids {
+            let resolved = self.store.resolve_lid_to_phone(lid);
+            if resolved != *lid {
+                if let Some(name) = sender_names.get(&resolved).cloned() {
+                    sender_names.insert(lid.clone(), name);
+                }
+            }
+        }
+
+        let chat_name = fetched_name.unwrap_or_else(|| chat.name.clone());
+
         self.active_chat = Some(ActiveChat {
             jid: chat.jid.clone(),
-            name: chat.name.clone(),
+            name: chat_name,
             is_group: chat.is_group,
             messages,
             members,
@@ -906,7 +1087,7 @@ impl App {
             input_buf: String::new(),
             reply_to: None,
             typing_jids: HashSet::new(),
-            sender_names: self.store.get_display_names().unwrap_or_default(),
+            sender_names,
             media_cache: HashMap::new(),
         });
 
@@ -917,6 +1098,9 @@ impl App {
             let wa = self.event_tx.clone();
             let client = self.wa.client.clone();
             tokio::spawn(async move {
+                // Wait for connection to stabilize before downloading
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
                 for msg in to_download {
                     if let Some(ref client) = client {
                         let direct_path = match msg.media_direct_path.as_deref() {
@@ -945,25 +1129,41 @@ impl App {
                             wacore::download::MediaType::Image
                         };
 
-                        match client
-                            .download_from_params(
-                                direct_path,
-                                media_key,
-                                file_sha256,
-                                file_enc_sha256,
-                                file_length,
-                                media_type,
-                            )
-                            .await
-                        {
-                            Ok(data) => {
-                                let _ = wa.send(AppEvent::MediaData {
-                                    message_id: msg.id.clone(),
-                                    data,
-                                });
+                        // Retry up to 3 times with backoff
+                        for attempt in 0..3u32 {
+                            if attempt > 0 {
+                                tokio::time::sleep(std::time::Duration::from_secs(
+                                    2u64.pow(attempt),
+                                ))
+                                .await;
                             }
-                            Err(e) => {
-                                tracing::debug!("auto-download failed for {}: {}", msg.id, e);
+                            match client
+                                .download_from_params(
+                                    direct_path,
+                                    media_key,
+                                    file_sha256,
+                                    file_enc_sha256,
+                                    file_length,
+                                    media_type,
+                                )
+                                .await
+                            {
+                                Ok(data) => {
+                                    let _ = wa.send(AppEvent::MediaData {
+                                        message_id: msg.id.clone(),
+                                        data,
+                                    });
+                                    break;
+                                }
+                                Err(e) => {
+                                    if attempt == 2 {
+                                        tracing::debug!(
+                                            "auto-download failed for {}: {}",
+                                            msg.id,
+                                            e
+                                        );
+                                    }
+                                }
                             }
                         }
                     }
@@ -1009,11 +1209,18 @@ impl App {
                 Some(m) => m,
                 None => return,
             };
+            tracing::debug!(
+                "download_selected_media: idx={}, type={}, has_path={}, cached={}",
+                idx, msg.message_type.as_str(),
+                msg.media_direct_path.is_some(),
+                active.media_cache.contains_key(&msg.id),
+            );
             if active.media_cache.contains_key(&msg.id) {
                 return; // Already cached
             }
             if msg.media_direct_path.is_none() {
-                return; // No download params
+                tracing::warn!("no download params for msg {}", msg.id);
+                return;
             }
             (msg.id.clone(), msg.clone())
         };
@@ -1021,10 +1228,13 @@ impl App {
         match self.wa.download_media_bytes(&msg_clone).await {
             Ok(data) => {
                 tracing::info!("downloaded media for msg {}: {} bytes", msg_id, data.len());
-                if let Some(proto) = crate::ui::image::create_protocol(&self.picker, &data) {
+                if let Some((proto, w, h)) = crate::ui::image::create_protocol(&self.picker, &data) {
                     if let Some(ref mut active) = self.active_chat {
-                        active.media_cache.insert(msg_id, proto);
+                        active.media_cache.insert(msg_id.clone(), (proto, w, h));
+                        tracing::info!("image cached for {} ({}x{})", msg_id, w, h);
                     }
+                } else {
+                    tracing::error!("create_protocol returned None for {}", msg_id);
                 }
             }
             Err(e) => {
@@ -1134,6 +1344,7 @@ impl App {
             link_url: None,
             caption: None,
             is_gif: false,
+            media_dimensions: None,
         };
 
         // Show immediately in the UI and scroll to bottom

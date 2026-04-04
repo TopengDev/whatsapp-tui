@@ -22,7 +22,7 @@ pub struct Message {
     pub from_me: bool,
     pub status: MessageStatus,
     pub reactions: Vec<super::reactions::Reaction>,
-    /// Transient: push name from the sender (not stored in DB, used to update contacts)
+    /// Sender's WhatsApp display name, persisted in DB for group message display.
     pub sender_push_name: Option<String>,
     /// Transient: raw media download params for stickers/images (not stored in DB)
     pub media_direct_path: Option<String>,
@@ -43,6 +43,8 @@ pub struct Message {
     pub caption: Option<String>,
     /// Whether a video is a GIF.
     pub is_gif: bool,
+    /// Image/sticker dimensions (width, height) for aspect-aware rendering.
+    pub media_dimensions: Option<(u32, u32)>,
 }
 
 #[derive(Debug, Clone)]
@@ -139,8 +141,9 @@ pub fn insert(conn: &Connection, msg: &Message) -> Result<()> {
         "INSERT OR REPLACE INTO messages (id, chat_jid, sender_jid, timestamp, content, \
          message_type, media_mime, media_size, media_filename, media_local_path, \
          reply_to_id, reply_to_preview, edited, deleted, from_me, status, \
-         media_direct_path, media_key, media_file_sha256, media_file_enc_sha256) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
+         media_direct_path, media_key, media_file_sha256, media_file_enc_sha256, \
+         sender_push_name) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
         params![
             msg.id,
             msg.chat_jid,
@@ -162,6 +165,7 @@ pub fn insert(conn: &Connection, msg: &Message) -> Result<()> {
             msg.media_key,
             msg.media_file_sha256,
             msg.media_file_enc_sha256,
+            msg.sender_push_name,
         ],
     )?;
     Ok(())
@@ -182,7 +186,8 @@ pub fn get(
     let cols = "id, chat_jid, sender_jid, timestamp, content, message_type, \
                 media_mime, media_size, media_filename, media_local_path, \
                 reply_to_id, reply_to_preview, edited, deleted, from_me, status, \
-                media_direct_path, media_key, media_file_sha256, media_file_enc_sha256";
+                media_direct_path, media_key, media_file_sha256, media_file_enc_sha256, \
+                sender_push_name";
 
     let jid_condition =
         "(chat_jid = ?1 OR chat_jid = (SELECT lid_jid FROM chats WHERE jid = ?1))";
@@ -220,6 +225,7 @@ pub fn search(conn: &Connection, query: &str, limit: u32) -> Result<Vec<(Message
          m.media_mime, m.media_size, m.media_filename, m.media_local_path, \
          m.reply_to_id, m.reply_to_preview, m.edited, m.deleted, m.from_me, m.status, \
          m.media_direct_path, m.media_key, m.media_file_sha256, m.media_file_enc_sha256, \
+         m.sender_push_name, \
          snippet(messages_fts, 0, '>>>', '<<<', '...', 32) as snip \
          FROM messages_fts \
          JOIN messages m ON m.rowid = messages_fts.rowid \
@@ -229,7 +235,7 @@ pub fn search(conn: &Connection, query: &str, limit: u32) -> Result<Vec<(Message
     let rows = stmt
         .query_map(params![query, limit], |row| {
             let msg = row_to_message(row)?;
-            let snippet: String = row.get(20)?;
+            let snippet: String = row.get(21)?;
             Ok((msg, snippet))
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -283,7 +289,7 @@ fn row_to_message(row: &rusqlite::Row) -> rusqlite::Result<Message> {
         from_me: from_me != 0,
         status: MessageStatus::from_str(&status_str),
         reactions: Vec::new(), // loaded separately
-        sender_push_name: None,
+        sender_push_name: row.get(20).unwrap_or(None),
         media_direct_path: row.get(16)?,
         media_key: row.get(17)?,
         media_file_sha256: row.get(18)?,
@@ -295,5 +301,6 @@ fn row_to_message(row: &rusqlite::Row) -> rusqlite::Result<Message> {
         link_url: None,
         caption: None,
         is_gif: false,
+        media_dimensions: None,
     })
 }

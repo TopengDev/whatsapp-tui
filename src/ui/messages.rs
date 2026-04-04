@@ -78,12 +78,22 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
         let sender_name = if msg.from_me {
             "You".to_string()
         } else {
-            // Priority: push_name from message > contacts/chats lookup > phone number
+            // Priority: push_name from DB > contacts/chats lookup > phone number > "Member"
             msg.sender_push_name
                 .as_deref()
                 .map(|s| s.to_string())
                 .or_else(|| active.sender_names.get(&msg.sender_jid).cloned())
-                .unwrap_or_else(|| msg.sender_jid.split('@').next().unwrap_or("?").to_string())
+                .unwrap_or_else(|| {
+                    let raw = msg.sender_jid.split('@').next().unwrap_or("?");
+                    if msg.sender_jid.contains("@lid") {
+                        // LID JIDs are opaque identifiers — show "Member" instead
+                        // of meaningless numbers. Names resolve over time as
+                        // real-time messages arrive with push names.
+                        format!("~{}", &raw[..raw.len().min(4)])
+                    } else {
+                        raw.to_string()
+                    }
+                })
         };
 
         let sender_color = if msg.from_me {
@@ -159,12 +169,20 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
         ) {
             // Image/sticker rendering is handled after the paragraph via StatefulImage.
             // Here we just reserve space with a placeholder.
-            if active.media_cache.contains_key(&msg.id) {
+            if let Some((_, cached_w, cached_h)) = active.media_cache.get(&msg.id) {
                 let is_sticker = matches!(
                     msg.message_type,
                     crate::store::messages::MessageType::Sticker
                 );
-                let img_height = if is_sticker { 8usize } else { 12usize };
+                let (cached_w, cached_h) = (*cached_w, *cached_h);
+                let img_height = if is_sticker {
+                    8usize
+                } else {
+                    let render_width = inner_width.saturating_sub(6).min(50);
+                    let aspect = cached_h as f32 / cached_w.max(1) as f32;
+                    let rows = (render_width as f32 * aspect / 2.0).round() as usize;
+                    rows.saturating_sub(1).clamp(3, 14)
+                };
                 // Snapshot current visual position (accumulated incrementally)
                 // Recompute here since lines were pushed since last update
                 visual_line_count = lines.iter().map(&visual_height).sum();
@@ -302,7 +320,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
             if img_area.height == 0 || img_area.width == 0 {
                 continue;
             }
-            if let Some(proto) = active.media_cache.get_mut(msg_id) {
+            if let Some((proto, _, _)) = active.media_cache.get_mut(msg_id) {
                 super::image::render_protocol(frame, img_area, proto);
             }
         }

@@ -47,6 +47,19 @@ impl Store {
             "ALTER TABLE messages ADD COLUMN media_file_enc_sha256 BLOB",
             [],
         );
+        // v4: add lid_jid to contacts for LID→phone resolution
+        let _ = self
+            .conn
+            .execute("ALTER TABLE contacts ADD COLUMN lid_jid TEXT", []);
+        // v5: normalize bare-JID contacts to full @s.whatsapp.net format
+        let _ = self.conn.execute(
+            "UPDATE contacts SET jid = jid || '@s.whatsapp.net' WHERE jid NOT LIKE '%@%'",
+            [],
+        );
+        // v6: persist sender push names on messages for group name display
+        let _ = self
+            .conn
+            .execute("ALTER TABLE messages ADD COLUMN sender_push_name TEXT", []);
         Ok(())
     }
 
@@ -170,20 +183,29 @@ impl Store {
         Ok(())
     }
 
-    /// Resolve a LID JID to a phone JID using the chats table mapping.
+    /// Resolve a LID JID to a phone JID using chats and contacts tables.
     /// Returns the phone JID if a mapping exists, otherwise returns the input unchanged.
     pub fn resolve_lid_to_phone(&self, jid: &str) -> String {
         if !jid.contains("@lid") {
             return jid.to_string();
         }
-        // Check if any phone-JID chat has this LID
-        self.conn
-            .query_row(
-                "SELECT jid FROM chats WHERE lid_jid = ?1 AND jid NOT LIKE '%@lid' LIMIT 1",
-                params![jid],
-                |row| row.get::<_, String>(0),
-            )
-            .unwrap_or_else(|_| jid.to_string())
+        // Check chats table first (DM chats have lid_jid mapping)
+        if let Ok(phone) = self.conn.query_row(
+            "SELECT jid FROM chats WHERE lid_jid = ?1 AND jid NOT LIKE '%@lid' LIMIT 1",
+            params![jid],
+            |row| row.get::<_, String>(0),
+        ) {
+            return phone;
+        }
+        // Check contacts table (ContactUpdate events store lid_jid)
+        if let Ok(phone) = self.conn.query_row(
+            "SELECT jid FROM contacts WHERE lid_jid = ?1 LIMIT 1",
+            params![jid],
+            |row| row.get::<_, String>(0),
+        ) {
+            return phone;
+        }
+        jid.to_string()
     }
 
     pub fn set_muted(&self, jid: &str, muted: bool) -> Result<()> {
@@ -224,6 +246,20 @@ impl Store {
         for row in rows2 {
             if let Ok((jid, name)) = row {
                 map.entry(jid).or_insert(name);
+            }
+        }
+        // Also map LID JIDs → names for contacts that have lid_jid set
+        let mut stmt3 = self.conn.prepare(
+            "SELECT lid_jid, COALESCE(name, push_name) FROM contacts \
+             WHERE lid_jid IS NOT NULL AND COALESCE(name, push_name) IS NOT NULL \
+             AND COALESCE(name, push_name) != ''",
+        )?;
+        let rows3 = stmt3.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows3 {
+            if let Ok((lid, name)) = row {
+                map.entry(lid).or_insert(name);
             }
         }
         Ok(map)

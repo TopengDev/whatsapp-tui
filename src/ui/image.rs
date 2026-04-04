@@ -6,7 +6,7 @@ use ratatui_image::{Resize, StatefulImage};
 
 /// Render a cached protocol state into a frame area.
 pub fn render_protocol(frame: &mut Frame, area: Rect, protocol: &mut StatefulProtocol) {
-    let widget = StatefulImage::default().resize(Resize::Crop(None));
+    let widget = StatefulImage::default().resize(Resize::Fit(None));
     // Clamp area to avoid overflow beyond the frame
     let safe_area = Rect {
         x: area.x,
@@ -23,8 +23,16 @@ pub fn render_protocol(frame: &mut Frame, area: Rect, protocol: &mut StatefulPro
 /// Create a new stateful protocol from raw image bytes.
 /// Thumbnails to 800x800 to bound memory while keeping good quality
 /// on HiDPI terminals. ratatui-image resizes further at render time.
-pub fn create_protocol(picker: &Picker, img_bytes: &[u8]) -> Option<StatefulProtocol> {
-    let img = image::load_from_memory(img_bytes).ok()?;
+/// Returns (protocol, original_width, original_height).
+pub fn create_protocol(picker: &Picker, img_bytes: &[u8]) -> Option<(StatefulProtocol, u32, u32)> {
+    let img = match image::load_from_memory(img_bytes) {
+        Ok(img) => img,
+        Err(e) => {
+            tracing::warn!("failed to decode image ({} bytes): {}", img_bytes.len(), e);
+            return None;
+        }
+    };
+    let (w, h) = (img.width(), img.height());
     let thumb = img.thumbnail(800, 800);
-    Some(picker.new_resize_protocol(thumb))
+    Some((picker.new_resize_protocol(thumb), w, h))
 }

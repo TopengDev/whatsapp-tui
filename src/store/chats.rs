@@ -24,9 +24,19 @@ pub fn upsert(conn: &Connection, chat: &Chat) -> Result<()> {
          ON CONFLICT(jid) DO UPDATE SET \
            name = CASE WHEN excluded.name != '' THEN excluded.name ELSE chats.name END, \
            is_group = excluded.is_group, \
-           last_message_ts = COALESCE(excluded.last_message_ts, chats.last_message_ts), \
-           last_message_preview = COALESCE(excluded.last_message_preview, chats.last_message_preview), \
-           unread_count = CASE WHEN excluded.unread_count > 0 THEN excluded.unread_count ELSE chats.unread_count END, \
+           last_message_ts = CASE \
+             WHEN excluded.last_message_ts IS NOT NULL \
+             THEN MAX(COALESCE(chats.last_message_ts, 0), excluded.last_message_ts) \
+             ELSE chats.last_message_ts END, \
+           last_message_preview = CASE \
+             WHEN excluded.last_message_ts IS NOT NULL \
+               AND excluded.last_message_ts >= COALESCE(chats.last_message_ts, 0) \
+             THEN COALESCE(excluded.last_message_preview, chats.last_message_preview) \
+             ELSE chats.last_message_preview END, \
+           unread_count = CASE \
+             WHEN excluded.unread_count = 0 AND excluded.last_message_ts IS NOT NULL THEN 0 \
+             WHEN excluded.unread_count > 0 THEN excluded.unread_count \
+             ELSE chats.unread_count END, \
            muted = excluded.muted, \
            pinned = excluded.pinned, \
            archived = excluded.archived, \
@@ -55,7 +65,10 @@ pub fn touch_last_message(
     preview: Option<&str>,
 ) -> Result<()> {
     conn.execute(
-        "UPDATE chats SET last_message_ts = ?1, last_message_preview = ?2 WHERE jid = ?3",
+        "UPDATE chats SET \
+         last_message_ts = MAX(COALESCE(last_message_ts, 0), ?1), \
+         last_message_preview = CASE WHEN ?1 >= COALESCE(last_message_ts, 0) THEN ?2 ELSE last_message_preview END \
+         WHERE jid = ?3",
         params![timestamp, preview, jid],
     )?;
     Ok(())

@@ -30,7 +30,22 @@ use wa::client::WaClient;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+
     let config = Config::load()?;
+
+    // Handle --resync: wipe databases for a clean re-pair
+    if args.iter().any(|a| a == "--resync") {
+        let data_dir = config.data_dir();
+        for name in &["app.db", "app.db-wal", "app.db-shm", "session.db", "session.db-wal", "session.db-shm"] {
+            let path = data_dir.join(name);
+            if path.exists() {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+        eprintln!("Databases cleared. Scan the QR code to re-pair.");
+    }
+
     tracing_init(&config)?;
 
     let store = Store::open(&config.data_dir())?;
@@ -47,7 +62,12 @@ async fn main() -> Result<()> {
     let result = app.run(terminal, event_rx).await;
 
     restore_terminal()?;
-    result
+
+    // Force-exit so lingering background tasks (WA reconnect, media downloads)
+    // don't keep the process alive after quit. Ensures the next `wa` launch
+    // always picks up a freshly built binary.
+    let code = if result.is_ok() { 0 } else { 1 };
+    std::process::exit(code);
 }
 
 fn setup_terminal() -> Result<Terminal<CrosstermBackend<io::Stdout>>> {

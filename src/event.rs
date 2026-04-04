@@ -15,6 +15,9 @@ pub enum AppEvent {
 
     /// Downloaded media bytes ready for inline rendering.
     MediaData { message_id: String, data: Vec<u8> },
+
+    /// Trigger a reconnect attempt (sent after a delay from BotStopped).
+    Reconnect,
 }
 
 /// Results from spawned background tasks

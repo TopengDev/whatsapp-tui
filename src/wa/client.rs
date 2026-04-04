@@ -282,10 +282,11 @@ impl WaClient {
     }
 
     /// Fetch group metadata (participants, subject, etc.) from the server.
-    pub async fn get_group_members(
+    /// Returns (subject, members).
+    pub async fn get_group_info(
         &self,
         group_jid: &str,
-    ) -> Result<Vec<crate::store::groups::GroupMember>> {
+    ) -> Result<(Option<String>, Vec<crate::store::groups::GroupMember>)> {
         let client = self
             .client
             .as_ref()
@@ -296,6 +297,12 @@ impl WaClient {
             .map_err(|e| anyhow::anyhow!("invalid JID: {:?}", e))?;
 
         let metadata = client.groups().get_metadata(&jid).await?;
+
+        let subject = if metadata.subject.is_empty() {
+            None
+        } else {
+            Some(metadata.subject.clone())
+        };
 
         let members = metadata
             .participants
@@ -311,7 +318,7 @@ impl WaClient {
             })
             .collect();
 
-        Ok(members)
+        Ok((subject, members))
     }
 
     /// Check if we're connected.
